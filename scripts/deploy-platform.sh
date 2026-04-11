@@ -34,13 +34,14 @@ echo "::endgroup::"
 
 echo "::group::Deploy Nebari platform via NIC"
 
-nic deploy -f "${CONFIG_FILE}" --timeout 15m
+# NIC creates the gitops directory with owner-only permissions (750/600 via
+# default umask). On Linux, the ArgoCD repo-server pod (uid 999) accesses this
+# via a hostPath bind mount and can't read those files. Set a permissive umask
+# BEFORE nic deploy so all files are created world-readable from the start —
+# this way ArgoCD can sync apps as soon as they're written, rather than waiting
+# for a post-deploy chmod that comes too late (after NIC's 5min LB wait).
+umask 022
 
-# NIC creates the gitops directory with restrictive permissions (750 for dirs,
-# 600 for files). On Linux, the ArgoCD repo-server pod (uid 999) accesses this
-# via a hostPath bind mount and needs read access. Fix permissions so the
-# non-root argocd user can read the repo through the mount.
-echo "Fixing gitops directory permissions for ArgoCD repo-server..."
-chmod -R a+rX "${GITOPS_DIR}"
+nic deploy -f "${CONFIG_FILE}" --timeout 15m
 
 echo "::endgroup::"
