@@ -21,6 +21,7 @@ K3D_ARGS=(
   --image "rancher/k3s:v${K8S_VERSION}-k3s1"
   --no-lb
   --k3s-arg "--disable=traefik@server:0"
+  --k3s-arg "--disable=servicelb@server:0"
   --wait
   --timeout 120s
 )
