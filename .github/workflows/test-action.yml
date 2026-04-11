@@ -75,30 +75,11 @@ jobs:
           profile: platform
           cluster-name: nebari-platform-test
 
-      - name: Wait for ArgoCD apps to sync
-        run: |
-          echo "Waiting for nebari-root to sync (up to 5 minutes)..."
-          for i in $(seq 1 60); do
-            STATUS=$(kubectl get application nebari-root -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
-            if [[ "${STATUS}" != "Unknown" ]]; then
-              echo "nebari-root sync status: ${STATUS}"
-              break
-            fi
-            echo "  Still waiting... (${i}/60)"
-            sleep 5
-          done
-
-          # Give child apps time to be created and start syncing
-          echo "Waiting for child apps to appear..."
-          for i in $(seq 1 30); do
-            APP_COUNT=$(kubectl get applications -n argocd --no-headers 2>/dev/null | wc -l)
-            if [[ "${APP_COUNT}" -gt 5 ]]; then
-              echo "Found ${APP_COUNT} ArgoCD applications"
-              break
-            fi
-            echo "  ${APP_COUNT} apps so far... (${i}/30)"
-            sleep 5
-          done
+      - name: Await workloads
+        uses: jupyterhub/action-k8s-await-workloads@v3
+        with:
+          timeout: 300
+          max-restarts: 3
 
       - name: Debug cluster state
         if: always()
@@ -115,31 +96,8 @@ jobs:
           kubectl get svc -A --field-selector spec.type=LoadBalancer || true
 
           echo ""
-          echo "=== Events (last 5 minutes, warnings only) ==="
+          echo "=== Events (warnings only) ==="
           kubectl get events -A --field-selector type=Warning --sort-by='.lastTimestamp' 2>/dev/null | tail -30 || true
-
-      - name: Verify platform components
-        run: |
-          echo "Cluster: ${{ steps.sandbox.outputs.cluster-name }}"
-          echo "Gateway IP: ${{ steps.sandbox.outputs.gateway-ip }}"
-
-          # Show all ArgoCD applications and their status
-          kubectl get applications -n argocd
-
-          # Verify ArgoCD is running
-          kubectl wait --for=condition=Ready pods --all -n argocd --timeout=120s
-
-          # Verify MetalLB is running
-          kubectl get pods -n metallb-system
-
-          # Verify cert-manager is running
-          kubectl get pods -n cert-manager
-
-          # Verify Envoy Gateway is running
-          kubectl get pods -n envoy-gateway-system || true
-
-          # Verify Keycloak is running
-          kubectl get pods -n keycloak || true
 
       - name: Cleanup
         if: always()
