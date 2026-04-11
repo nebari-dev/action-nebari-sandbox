@@ -75,12 +75,40 @@ jobs:
           profile: platform
           cluster-name: nebari-platform-test
 
-      - name: Await workloads
+      - name: Await ArgoCD workloads
         uses: jupyterhub/action-k8s-await-workloads@v3
         with:
-          namespace: ""
+          namespace: argocd
           timeout: 300
           max-restarts: 3
+
+      - name: Await MetalLB workloads
+        uses: jupyterhub/action-k8s-await-workloads@v3
+        with:
+          namespace: metallb-system
+          timeout: 300
+          max-restarts: 3
+
+      - name: Await cert-manager workloads
+        uses: jupyterhub/action-k8s-await-workloads@v3
+        with:
+          namespace: cert-manager
+          timeout: 300
+          max-restarts: 3
+
+      - name: Await Envoy Gateway workloads
+        uses: jupyterhub/action-k8s-await-workloads@v3
+        with:
+          namespace: envoy-gateway-system
+          timeout: 300
+          max-restarts: 3
+
+      - name: Await Keycloak workloads
+        uses: jupyterhub/action-k8s-await-workloads@v3
+        with:
+          namespace: keycloak
+          timeout: 300
+          max-restarts: 5
 
       - name: Debug cluster state
         if: always()
