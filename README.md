@@ -16,8 +16,7 @@
 
 <p align="center">
   <a href="https://github.com/nebari-dev/action-nebari-sandbox/actions/workflows/test-action.yml"><img src="https://github.com/nebari-dev/action-nebari-sandbox/actions/workflows/test-action.yml/badge.svg" alt="Test Action"></a>
-  <a href="https://github.com/nebari-dev/action-nebari-sandbox/blob/main/LICENSE"><img src="https://img.shields.io/github/license/nebari-dev/action-nebari-sandbox" alt="License"></a>
-  <a href="https://github.com/nebari-dev/action-nebari-sandbox/releases"><img src="https://img.shields.io/github/v/release/nebari-dev/action-nebari-sandbox?label=latest%20release" alt="Latest Release"></a>
+  <a href="https://github.com/nebari-dev/action-nebari-sandbox/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"></a>
   <a href="https://kubernetes.io"><img src="https://img.shields.io/badge/kubernetes-v1.32-blue?logo=kubernetes&logoColor=white" alt="Kubernetes"></a>
   <a href="https://k3d.io"><img src="https://img.shields.io/badge/k3d-v5.8.3-purple" alt="k3d"></a>
 </p>
