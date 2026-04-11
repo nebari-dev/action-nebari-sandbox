@@ -3,8 +3,9 @@ set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:?CLUSTER_NAME is required}"
 K8S_VERSION="${K8S_VERSION:?K8S_VERSION is required}"
+PROFILE="${PROFILE:-cluster-only}"
 
-echo "::group::Create k3d cluster '${CLUSTER_NAME}'"
+echo "::group::Create k3d cluster '${CLUSTER_NAME}' (profile: ${PROFILE})"
 
 # Delete the cluster if it already exists (idempotent re-runs)
 if k3d cluster list -o json | python3 -c "
@@ -16,12 +17,31 @@ sys.exit(0 if any(c['name'] == '${CLUSTER_NAME}' for c in clusters) else 1)
   k3d cluster delete "${CLUSTER_NAME}"
 fi
 
-k3d cluster create "${CLUSTER_NAME}" \
-  --image "rancher/k3s:v${K8S_VERSION}-k3s1" \
-  --no-lb \
-  --k3s-arg "--disable=traefik@server:0" \
-  --wait \
+K3D_ARGS=(
+  --image "rancher/k3s:v${K8S_VERSION}-k3s1"
+  --no-lb
+  --k3s-arg "--disable=traefik@server:0"
+  --wait
   --timeout 120s
+)
+
+if [[ "${PROFILE}" == "platform" ]]; then
+  # NIC's local provider uses MetalLB with a hardcoded 192.168.1.100-110 pool.
+  # Create a Docker network matching that subnet so MetalLB IPs are routable.
+  NETWORK_NAME="nebari-${CLUSTER_NAME}-net"
+  if ! docker network inspect "${NETWORK_NAME}" &>/dev/null; then
+    echo "Creating Docker network '${NETWORK_NAME}' (192.168.1.0/24)..."
+    docker network create --subnet 192.168.1.0/24 "${NETWORK_NAME}"
+  fi
+  K3D_ARGS+=(--network "${NETWORK_NAME}")
+
+  # Mount the gitops directory so ArgoCD repo-server can access file:// repos.
+  GITOPS_DIR="/tmp/nebari-gitops-${CLUSTER_NAME}"
+  mkdir -p "${GITOPS_DIR}"
+  K3D_ARGS+=(--volume "${GITOPS_DIR}:${GITOPS_DIR}")
+fi
+
+k3d cluster create "${CLUSTER_NAME}" "${K3D_ARGS[@]}"
 
 echo "::endgroup::"
 

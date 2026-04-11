@@ -26,7 +26,7 @@
 | Profile | What it does | Speed |
 |---------|-------------|-------|
 | `cluster-only` | k3d cluster + kubeconfig | ~15s |
-| `platform` | Full Nebari stack via NIC/ArgoCD (cert-manager, Envoy Gateway, Keycloak, nebari-operator) | _Coming soon_ |
+| `platform` | Full Nebari stack via NIC/ArgoCD (cert-manager, Envoy Gateway, Keycloak, MetalLB, nebari-operator) | ~5-10min |
 
 ## Usage
 
@@ -51,6 +51,39 @@ steps:
       KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
 ```
 
+### platform
+
+Deploy the full Nebari foundational stack for integration testing:
+
+```yaml
+steps:
+  - uses: actions/checkout@v6
+
+  - uses: actions/setup-go@v5
+    with:
+      go-version: "1.24"
+
+  - uses: nebari-dev/action-nebari-sandbox@main
+    id: sandbox
+    with:
+      profile: platform
+
+  - name: Run integration tests
+    run: |
+      kubectl get applications -n argocd
+      # your integration tests here
+
+  - name: Cleanup
+    if: always()
+    run: |
+      k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
+      docker network rm nebari-${{ steps.sandbox.outputs.cluster-name }}-net 2>/dev/null || true
+```
+
+> **Note:** The `platform` profile requires Go to build NIC from source. It currently
+> pins to the [`local_git`](https://github.com/nebari-dev/nebari-infrastructure-core/pull/136)
+> branch of NIC, which adds `file://` git support for local ArgoCD deployments.
+
 ## Inputs
 
 | Input | Description | Default |
@@ -62,24 +95,36 @@ steps:
 
 ## Outputs
 
-| Output | Description |
-|--------|-------------|
-| `kubeconfig` | Path to the kubeconfig file |
-| `cluster-name` | Name of the created k3d cluster |
+| Output | Description | Profile |
+|--------|-------------|---------|
+| `kubeconfig` | Path to the kubeconfig file | all |
+| `cluster-name` | Name of the created k3d cluster | all |
+| `keycloak-admin-password` | Keycloak admin password | `platform` |
+| `argocd-admin-password` | ArgoCD admin password | `platform` |
+| `gateway-ip` | MetalLB gateway IP address | `platform` |
 
 ## Cleanup
 
 The action does not automatically delete the cluster. Add a cleanup step to your workflow:
 
 ```yaml
+# cluster-only
 - name: Cleanup
   if: always()
   run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
+
+# platform (also removes the Docker network)
+- name: Cleanup
+  if: always()
+  run: |
+    k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
+    docker network rm nebari-${{ steps.sandbox.outputs.cluster-name }}-net 2>/dev/null || true
 ```
 
 ## Requirements
 
-Runs on `ubuntu-latest`. Requires Docker (pre-installed on GitHub-hosted runners).
+- **Both profiles:** `ubuntu-latest` runner with Docker (pre-installed on GitHub-hosted runners)
+- **`platform` profile:** Go 1.24+ (use `actions/setup-go@v5`) — NIC is built from source until a release with `file://` git support is available
 
 ## License
 

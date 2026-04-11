@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test-cluster-only:
     name: "Test cluster-only profile"
@@ -41,3 +44,52 @@ jobs:
       - name: Cleanup
         if: always()
         run: k3d cluster delete test-cluster
+
+  test-platform:
+    name: "Test platform profile"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Setup Nebari Sandbox
+        id: sandbox
+        uses: ./
+        with:
+          profile: platform
+          cluster-name: nebari-platform-test
+
+      - name: Verify platform components
+        run: |
+          echo "Cluster: ${{ steps.sandbox.outputs.cluster-name }}"
+          echo "Gateway IP: ${{ steps.sandbox.outputs.gateway-ip }}"
+
+          # Verify ArgoCD is running
+          kubectl get pods -n argocd
+          kubectl wait --for=condition=Ready pods --all -n argocd --timeout=120s
+
+          # Verify Keycloak is running
+          kubectl get pods -n keycloak
+
+          # Verify cert-manager is running
+          kubectl get pods -n cert-manager
+
+          # Verify Envoy Gateway is running
+          kubectl get pods -n envoy-gateway-system || true
+
+          # Verify MetalLB is running
+          kubectl get pods -n metallb-system || true
+
+          # Show all ArgoCD applications
+          kubectl get applications -n argocd || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          k3d cluster delete nebari-platform-test
+          docker network rm nebari-nebari-platform-test-net 2>/dev/null || true
