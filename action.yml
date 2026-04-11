@@ -1,0 +1,48 @@
+name: "Setup Nebari Sandbox"
+description: "Reusable GitHub Action to bootstrap a local Kubernetes test environment for Nebari component testing"
+
+inputs:
+  profile:
+    description: >
+      Deployment profile.
+      - cluster-only: k3d cluster + kubeconfig, no NIC (fast, ~15s).
+      - platform: full foundational stack via NIC/ArgoCD (not yet implemented).
+    required: false
+    default: "cluster-only"
+  cluster-name:
+    description: "Name for the k3d cluster"
+    required: false
+    default: "nebari-test"
+  k8s-version:
+    description: "Kubernetes version to use (maps to a k3d image tag)"
+    required: false
+    default: "1.32.4"
+  k3d-version:
+    description: "k3d version to install"
+    required: false
+    default: "5.8.3"
+
+outputs:
+  kubeconfig:
+    description: "Path to the kubeconfig file for the created cluster"
+    value: ${{ steps.create-cluster.outputs.kubeconfig }}
+  cluster-name:
+    description: "Name of the created k3d cluster"
+    value: ${{ steps.create-cluster.outputs.cluster-name }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install k3d
+      shell: bash
+      run: ${{ github.action_path }}/scripts/install-k3d.sh
+      env:
+        K3D_VERSION: ${{ inputs.k3d-version }}
+
+    - name: Create k3d cluster
+      id: create-cluster
+      shell: bash
+      run: ${{ github.action_path }}/scripts/create-cluster.sh
+      env:
+        CLUSTER_NAME: ${{ inputs.cluster-name }}
+        K8S_VERSION: ${{ inputs.k8s-version }}

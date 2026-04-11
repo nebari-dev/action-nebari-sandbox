@@ -1,0 +1,43 @@
+name: Test Action
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test-cluster-only:
+    name: "Test cluster-only profile"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Nebari Sandbox
+        id: sandbox
+        uses: ./
+        with:
+          profile: cluster-only
+          cluster-name: test-cluster
+
+      - name: Verify cluster is functional
+        run: |
+          echo "Kubeconfig: ${{ steps.sandbox.outputs.kubeconfig }}"
+          echo "Cluster: ${{ steps.sandbox.outputs.cluster-name }}"
+
+          # Verify we can talk to the cluster
+          kubectl get namespaces
+
+          # Verify core components are running
+          kubectl get pods -n kube-system
+
+          # Deploy a simple workload to confirm scheduling works
+          kubectl create deployment nginx --image=nginx:alpine --replicas=1
+          kubectl wait --for=condition=Available deployment/nginx --timeout=60s
+          kubectl delete deployment nginx
+
+      - name: Cleanup
+        if: always()
+        run: k3d cluster delete test-cluster
