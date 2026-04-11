@@ -31,7 +31,7 @@ if [[ "${PROFILE}" == "platform" ]]; then
   NETWORK_NAME="nebari-${CLUSTER_NAME}-net"
   if ! docker network inspect "${NETWORK_NAME}" &>/dev/null; then
     echo "Creating Docker network '${NETWORK_NAME}' (192.168.1.0/24)..."
-    docker network create --subnet 192.168.1.0/24 "${NETWORK_NAME}"
+    docker network create --subnet 192.168.1.0/24 --gateway 192.168.1.1 "${NETWORK_NAME}"
   fi
   K3D_ARGS+=(--network "${NETWORK_NAME}")
 
