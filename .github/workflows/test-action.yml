@@ -78,6 +78,7 @@ jobs:
       - name: Await workloads
         uses: jupyterhub/action-k8s-await-workloads@v3
         with:
+          namespace: ""
           timeout: 300
           max-restarts: 3
 
