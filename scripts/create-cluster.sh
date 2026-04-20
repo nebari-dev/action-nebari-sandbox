@@ -57,6 +57,26 @@ kubectl get nodes -o wide
 
 echo "::endgroup::"
 
+if [[ "${PROFILE}" == "platform" ]]; then
+  echo "::group::Create 'standard' StorageClass (workaround)"
+
+  # NIC's local provider hardcodes StorageClass "standard", but k3s only ships
+  # "local-path". Create a "standard" class backed by the same provisioner.
+  # TODO: Remove once nebari-dev/nebari-infrastructure-core#201 merges and
+  #       NIC supports configuring storage_class per provider.
+  kubectl apply -f - <<'SC'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: standard
+provisioner: rancher.io/local-path
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+SC
+
+  echo "::endgroup::"
+fi
+
 # Set outputs
 KUBECONFIG_PATH="${HOME}/.kube/config"
 k3d kubeconfig merge "${CLUSTER_NAME}" --kubeconfig-merge-default
