@@ -115,6 +115,16 @@ jobs:
       - name: Debug cluster state
         if: always()
         run: |
+          echo "=== Node resources (capacity, allocatable, allocated) ==="
+          kubectl describe node | grep -A 20 "Allocated resources:" || true
+          echo ""
+          kubectl describe node | grep -E "cpu|memory" | head -10 || true
+
+          echo ""
+          echo "=== Pod resource requests ==="
+          kubectl get pods -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,STATUS:.status.phase,CPU_REQ:.spec.containers[*].resources.requests.cpu,MEM_REQ:.spec.containers[*].resources.requests.memory' || true
+
+          echo ""
           echo "=== ArgoCD Applications ==="
           kubectl get applications -n argocd -o wide || true
 
