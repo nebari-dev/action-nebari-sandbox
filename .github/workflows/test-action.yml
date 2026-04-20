@@ -87,7 +87,9 @@ jobs:
         with:
           namespace: metallb-system
           timeout: 300
-          max-restarts: 3
+          # ArgoCD may sync the speaker DaemonSet before the metallb-memberlist
+          # Secret, causing a few restarts until the secret appears.
+          max-restarts: 10
 
       - name: Await cert-manager workloads
         uses: jupyterhub/action-k8s-await-workloads@v3
