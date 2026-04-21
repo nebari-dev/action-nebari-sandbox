@@ -95,27 +95,41 @@ steps:
 > pins to the [`local_git`](https://github.com/nebari-dev/nebari-infrastructure-core/pull/136)
 > branch of NIC, which adds `file://` git support for local ArgoCD deployments.
 
+<!--
+  Inputs and Outputs sections below are auto-generated from action.yml by
+  npm's `action-docs` (run by .github/workflows/docs-check.yml on each PR).
+
+  To update locally:
+      npx --yes action-docs@2.4.0 --no-banner --update-readme README.md
+
+  Do not edit the contents between the marker comments by hand.
+-->
+
+<!-- action-docs-inputs action="action.yml" -->
 ## Inputs
 
-| Input | Description | Default |
-|-------|-------------|---------|
-| `profile` | Deployment profile (`cluster-only` or `platform`) | `cluster-only` |
-| `cluster-name` | Name for the k3d cluster | `nebari-test` |
-| `k8s-version` | Kubernetes version | `1.32.4` |
-| `k3d-version` | k3d version to install | `5.8.3` |
-| `resource-summary` | When `"true"` (and `profile: platform`), append a markdown table of pod resource requests/limits and node allocatable capacity to `$GITHUB_STEP_SUMMARY`. Useful for tracking minimum-spec requirements. | `"false"` |
+| name | description | required | default |
+| --- | --- | --- | --- |
+| `profile` | <p>Deployment profile. - cluster-only: k3d cluster + kubeconfig, no NIC (fast, ~15s). - platform: full foundational stack via NIC/ArgoCD.</p> | `false` | `cluster-only` |
+| `cluster-name` | <p>Name for the k3d cluster</p> | `false` | `nebari-test` |
+| `k8s-version` | <p>Kubernetes version to use (maps to a k3d image tag)</p> | `false` | `1.32.4` |
+| `k3d-version` | <p>k3d version to install</p> | `false` | `5.8.3` |
+| `resource-summary` | <p>When 'true' (and profile is 'platform'), append a markdown table of pod resource requests/limits and node allocatable capacity to $GITHUB<em>STEP</em>SUMMARY after the platform stack is up. Useful for tracking minimum-spec requirements as the foundational stack evolves.</p> | `false` | `false` |
+<!-- action-docs-inputs action="action.yml" -->
 
+<!-- action-docs-outputs action="action.yml" -->
 ## Outputs
 
-| Output | Description | Profile |
-|--------|-------------|---------|
-| `kubeconfig` | Path to the kubeconfig file | all |
-| `cluster-name` | Name of the created k3d cluster | all |
-| `network-name` | Docker network created for the cluster (use in cleanup) | `platform` |
-| `gitops-dir` | Local GitOps directory mounted into the cluster | `platform` |
-| `keycloak-admin-password` | Keycloak admin password | `platform` |
-| `argocd-admin-password` | ArgoCD admin password | `platform` |
-| `gateway-ip` | MetalLB gateway IP address | `platform` |
+| name | description |
+| --- | --- |
+| `kubeconfig` | <p>Path to the kubeconfig file for the created cluster</p> |
+| `cluster-name` | <p>Name of the created k3d cluster</p> |
+| `network-name` | <p>Docker network created for the cluster (platform profile only). Use this in cleanup steps.</p> |
+| `gitops-dir` | <p>Local GitOps directory mounted into the cluster (platform profile only)</p> |
+| `keycloak-admin-password` | <p>Keycloak admin password (platform profile only)</p> |
+| `argocd-admin-password` | <p>ArgoCD admin password (platform profile only)</p> |
+| `gateway-ip` | <p>MetalLB gateway IP address (platform profile only)</p> |
+<!-- action-docs-outputs action="action.yml" -->
 
 ## Cleanup
 

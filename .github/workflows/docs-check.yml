@@ -1,0 +1,27 @@
+name: Docs sync check
+
+on:
+  pull_request:
+    paths:
+      - action.yml
+      - README.md
+      - .github/workflows/docs-check.yml
+
+jobs:
+  check:
+    name: README in sync with action.yml
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Regenerate README from action.yml
+        run: npx --yes action-docs@2.4.0 --no-banner --update-readme README.md
+
+      - name: Verify no drift
+        run: |
+          if ! git diff --exit-code README.md; then
+            echo "::error::README.md is out of sync with action.yml."
+            echo "Run locally and commit:"
+            echo "  npx --yes action-docs@2.4.0 --no-banner --update-readme README.md"
+            exit 1
+          fi
