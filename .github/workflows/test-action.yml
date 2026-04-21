@@ -74,6 +74,7 @@ jobs:
         with:
           profile: platform
           cluster-name: nebari-platform-test
+          resource-summary: "true"
 
       - name: Await ArgoCD workloads
         uses: jupyterhub/action-k8s-await-workloads@v3

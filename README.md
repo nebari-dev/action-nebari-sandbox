@@ -103,6 +103,7 @@ steps:
 | `cluster-name` | Name for the k3d cluster | `nebari-test` |
 | `k8s-version` | Kubernetes version | `1.32.4` |
 | `k3d-version` | k3d version to install | `5.8.3` |
+| `resource-summary` | When `"true"` (and `profile: platform`), append a markdown table of pod resource requests/limits and node allocatable capacity to `$GITHUB_STEP_SUMMARY`. Useful for tracking minimum-spec requirements. | `"false"` |
 
 ## Outputs
 
