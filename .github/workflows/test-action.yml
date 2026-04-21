@@ -13,7 +13,7 @@ env:
 jobs:
   test-cluster-only:
     name: "Test cluster-only profile"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -47,10 +47,33 @@ jobs:
 
   test-platform:
     name: "Test platform profile"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Inspect runner host resources
+        run: |
+          echo "=== nproc ==="
+          nproc
+          echo ""
+          echo "=== /proc/cpuinfo (processor count) ==="
+          grep -c ^processor /proc/cpuinfo
+          echo ""
+          echo "=== lscpu ==="
+          lscpu
+          echo ""
+          echo "=== free -h ==="
+          free -h
+          echo ""
+          echo "=== /proc/meminfo (MemTotal) ==="
+          grep MemTotal /proc/meminfo
+          echo ""
+          echo "=== df -h / ==="
+          df -h /
+          echo ""
+          echo "=== Docker info CPUs/Memory ==="
+          docker info --format 'CPUs: {{.NCPU}} / Memory: {{.MemTotal}}' || true
 
       - name: Setup Go
         uses: actions/setup-go@v5
