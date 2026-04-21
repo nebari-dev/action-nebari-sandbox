@@ -35,6 +35,12 @@ outputs:
   cluster-name:
     description: "Name of the created k3d cluster"
     value: ${{ steps.create-cluster.outputs.cluster-name }}
+  network-name:
+    description: "Docker network created for the cluster (platform profile only). Use this in cleanup steps."
+    value: ${{ steps.create-cluster.outputs.network-name }}
+  gitops-dir:
+    description: "Local GitOps directory mounted into the cluster (platform profile only)"
+    value: ${{ steps.create-cluster.outputs.gitops-dir }}
   keycloak-admin-password:
     description: "Keycloak admin password (platform profile only)"
     value: ${{ steps.extract-outputs.outputs.keycloak-admin-password }}
@@ -74,6 +80,7 @@ runs:
       run: ${{ github.action_path }}/scripts/deploy-platform.sh
       env:
         CLUSTER_NAME: ${{ inputs.cluster-name }}
+        GITOPS_DIR: ${{ steps.create-cluster.outputs.gitops-dir }}
 
     - name: Extract platform outputs
       if: inputs.profile == 'platform'

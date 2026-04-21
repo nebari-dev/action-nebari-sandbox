@@ -2,7 +2,7 @@
 set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:?CLUSTER_NAME is required}"
-GITOPS_DIR="/tmp/nebari-gitops-${CLUSTER_NAME}"
+GITOPS_DIR="${GITOPS_DIR:?GITOPS_DIR is required (set by create-cluster step)}"
 CONFIG_FILE="/tmp/nic-config-${CLUSTER_NAME}.yaml"
 
 echo "::group::Generate NIC config"

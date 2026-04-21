@@ -77,7 +77,7 @@ steps:
     if: always()
     run: |
       k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
-      docker network rm nebari-${{ steps.sandbox.outputs.cluster-name }}-net 2>/dev/null || true
+      docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
 ```
 
 > **Note:** The `platform` profile requires Go to build NIC from source. It currently
@@ -99,6 +99,8 @@ steps:
 |--------|-------------|---------|
 | `kubeconfig` | Path to the kubeconfig file | all |
 | `cluster-name` | Name of the created k3d cluster | all |
+| `network-name` | Docker network created for the cluster (use in cleanup) | `platform` |
+| `gitops-dir` | Local GitOps directory mounted into the cluster | `platform` |
 | `keycloak-admin-password` | Keycloak admin password | `platform` |
 | `argocd-admin-password` | ArgoCD admin password | `platform` |
 | `gateway-ip` | MetalLB gateway IP address | `platform` |
@@ -118,12 +120,12 @@ The action does not automatically delete the cluster. Add a cleanup step to your
   if: always()
   run: |
     k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
-    docker network rm nebari-${{ steps.sandbox.outputs.cluster-name }}-net 2>/dev/null || true
+    docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
 ```
 
 ## Requirements
 
-- **Both profiles:** `ubuntu-latest` runner with Docker (pre-installed on GitHub-hosted runners)
+- **Both profiles:** `ubuntu-24.04` (or `ubuntu-latest`) runner with Docker (pre-installed on GitHub-hosted runners)
 - **`platform` profile:** Go 1.24+ (use `actions/setup-go@v5`) — NIC is built from source until a release with `file://` git support is available
 
 ## License

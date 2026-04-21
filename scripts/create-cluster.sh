@@ -19,17 +19,20 @@ fi
 
 K3D_ARGS=(
   --image "rancher/k3s:v${K8S_VERSION}-k3s1"
-  --no-lb
-  --k3s-arg "--disable=traefik@server:0"
-  --k3s-arg "--disable=servicelb@server:0"
+  --no-lb                                          # don't run k3d's serverlb proxy
+  --k3s-arg "--disable=traefik@server:0"           # Nebari uses Envoy Gateway instead
+  --k3s-arg "--disable=servicelb@server:0"         # let MetalLB own LoadBalancer services
   --wait
   --timeout 120s
 )
 
+# Source of truth for derived names (also exported as action outputs below).
+NETWORK_NAME="nebari-${CLUSTER_NAME}-net"
+GITOPS_DIR="/tmp/nebari-gitops-${CLUSTER_NAME}"
+
 if [[ "${PROFILE}" == "platform" ]]; then
   # NIC's local provider uses MetalLB with a hardcoded 192.168.1.100-110 pool.
   # Create a Docker network matching that subnet so MetalLB IPs are routable.
-  NETWORK_NAME="nebari-${CLUSTER_NAME}-net"
   if ! docker network inspect "${NETWORK_NAME}" &>/dev/null; then
     echo "Creating Docker network '${NETWORK_NAME}' (192.168.1.0/24)..."
     docker network create --subnet 192.168.1.0/24 --gateway 192.168.1.1 "${NETWORK_NAME}"
@@ -37,7 +40,6 @@ if [[ "${PROFILE}" == "platform" ]]; then
   K3D_ARGS+=(--network "${NETWORK_NAME}")
 
   # Mount the gitops directory so ArgoCD repo-server can access file:// repos.
-  GITOPS_DIR="/tmp/nebari-gitops-${CLUSTER_NAME}"
   mkdir -p "${GITOPS_DIR}"
   K3D_ARGS+=(--volume "${GITOPS_DIR}:${GITOPS_DIR}")
 fi
@@ -83,3 +85,9 @@ k3d kubeconfig merge "${CLUSTER_NAME}" --kubeconfig-merge-default
 
 echo "kubeconfig=${KUBECONFIG_PATH}" >> "${GITHUB_OUTPUT}"
 echo "cluster-name=${CLUSTER_NAME}" >> "${GITHUB_OUTPUT}"
+
+# Platform-only outputs reflect resources that were actually created.
+if [[ "${PROFILE}" == "platform" ]]; then
+  echo "network-name=${NETWORK_NAME}" >> "${GITHUB_OUTPUT}"
+  echo "gitops-dir=${GITOPS_DIR}" >> "${GITHUB_OUTPUT}"
+fi
