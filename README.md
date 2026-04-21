@@ -36,9 +36,9 @@ Spin up a bare Kubernetes cluster for quick smoke tests:
 
 ```yaml
 steps:
-  - uses: actions/checkout@v4
+  - uses: actions/checkout@v6
 
-  - uses: nebari-dev/action-nebari-sandbox@v1
+  - uses: nebari-dev/action-nebari-sandbox@main
     id: sandbox
     with:
       profile: cluster-only
@@ -49,6 +49,10 @@ steps:
       # your tests here
     env:
       KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+
+  - name: Cleanup
+    if: always()
+    run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
 ```
 
 ### platform
@@ -69,8 +73,15 @@ steps:
       profile: platform
 
   - name: Run integration tests
+    env:
+      KEYCLOAK_ADMIN_PASSWORD: ${{ steps.sandbox.outputs.keycloak-admin-password }}
+      ARGOCD_ADMIN_PASSWORD: ${{ steps.sandbox.outputs.argocd-admin-password }}
+      GATEWAY_IP: ${{ steps.sandbox.outputs.gateway-ip }}
     run: |
       kubectl get applications -n argocd
+      # Reach the gateway from inside the runner:
+      curl -sk --resolve "keycloak.nebari.local:443:${GATEWAY_IP}" \
+        https://keycloak.nebari.local/realms/master/.well-known/openid-configuration
       # your integration tests here
 
   - name: Cleanup
