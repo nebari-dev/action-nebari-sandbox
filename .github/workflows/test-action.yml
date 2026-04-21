@@ -55,7 +55,10 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.24"
+          # NIC's go.mod tracks the latest stable Go release.
+          # setup-go@v6 sets GOTOOLCHAIN=local by default, so the installed
+          # version must already satisfy the go.mod directive.
+          go-version: "1.25"
           cache: false
 
       - name: Cache NIC Go modules and build

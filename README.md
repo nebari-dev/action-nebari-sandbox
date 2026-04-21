@@ -63,9 +63,9 @@ Deploy the full Nebari foundational stack for integration testing:
 steps:
   - uses: actions/checkout@v6
 
-  - uses: actions/setup-go@v5
+  - uses: actions/setup-go@v6
     with:
-      go-version: "1.24"
+      go-version: "1.25"
 
   - uses: nebari-dev/action-nebari-sandbox@main
     id: sandbox
@@ -138,7 +138,7 @@ The action does not automatically delete the cluster. Add a cleanup step to your
 ## Requirements
 
 - **Both profiles:** `ubuntu-24.04` (or `ubuntu-latest`) runner with Docker (pre-installed on GitHub-hosted runners)
-- **`platform` profile:** Go 1.24+ (use `actions/setup-go@v5`) — NIC is built from source until a release with `file://` git support is available
+- **`platform` profile:** Go 1.25+ (use `actions/setup-go@v6`) — NIC is built from source until a release with `file://` git support is available
 
 ## License
 
