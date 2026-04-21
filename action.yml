@@ -6,7 +6,7 @@ inputs:
     description: >
       Deployment profile.
       - cluster-only: k3d cluster + kubeconfig, no NIC (fast, ~15s).
-      - platform: full foundational stack via NIC/ArgoCD (not yet implemented).
+      - platform: full foundational stack via NIC/ArgoCD (cert-manager, Envoy Gateway, Keycloak, nebari-operator).
     required: false
     default: "cluster-only"
   cluster-name:
@@ -21,6 +21,12 @@ inputs:
     description: "k3d version to install"
     required: false
     default: "5.8.3"
+  # nic-version:
+  #   description: "NIC version — release tag (e.g. v0.1.0) or branch name"
+  #   required: false
+  #   default: "latest"
+  #   NOTE: Disabled until NIC cuts a release with file:// git support (PR #136).
+  #   The platform profile currently builds from the local_git branch.
 
 outputs:
   kubeconfig:
@@ -29,6 +35,21 @@ outputs:
   cluster-name:
     description: "Name of the created k3d cluster"
     value: ${{ steps.create-cluster.outputs.cluster-name }}
+  network-name:
+    description: "Docker network created for the cluster (platform profile only). Use this in cleanup steps."
+    value: ${{ steps.create-cluster.outputs.network-name }}
+  gitops-dir:
+    description: "Local GitOps directory mounted into the cluster (platform profile only)"
+    value: ${{ steps.create-cluster.outputs.gitops-dir }}
+  keycloak-admin-password:
+    description: "Keycloak admin password (platform profile only)"
+    value: ${{ steps.extract-outputs.outputs.keycloak-admin-password }}
+  argocd-admin-password:
+    description: "ArgoCD admin password (platform profile only)"
+    value: ${{ steps.extract-outputs.outputs.argocd-admin-password }}
+  gateway-ip:
+    description: "MetalLB gateway IP address (platform profile only)"
+    value: ${{ steps.extract-outputs.outputs.gateway-ip }}
 
 runs:
   using: "composite"
@@ -46,3 +67,23 @@ runs:
       env:
         CLUSTER_NAME: ${{ inputs.cluster-name }}
         K8S_VERSION: ${{ inputs.k8s-version }}
+        PROFILE: ${{ inputs.profile }}
+
+    - name: Install NIC
+      if: inputs.profile == 'platform'
+      shell: bash
+      run: ${{ github.action_path }}/scripts/install-nic.sh
+
+    - name: Deploy platform
+      if: inputs.profile == 'platform'
+      shell: bash
+      run: ${{ github.action_path }}/scripts/deploy-platform.sh
+      env:
+        CLUSTER_NAME: ${{ inputs.cluster-name }}
+        GITOPS_DIR: ${{ steps.create-cluster.outputs.gitops-dir }}
+
+    - name: Extract platform outputs
+      if: inputs.profile == 'platform'
+      id: extract-outputs
+      shell: bash
+      run: ${{ github.action_path }}/scripts/extract-outputs.sh

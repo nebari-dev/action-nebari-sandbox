@@ -7,10 +7,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test-cluster-only:
     name: "Test cluster-only profile"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -40,4 +43,93 @@ jobs:
 
       - name: Cleanup
         if: always()
-        run: k3d cluster delete test-cluster
+        run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
+
+  test-platform:
+    name: "Test platform profile"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+
+      - name: Cache NIC Go modules and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: nic-go-${{ runner.os }}-${{ hashFiles('.github/workflows/test-action.yml') }}
+          restore-keys: |
+            nic-go-${{ runner.os }}-
+
+      - name: Setup Nebari Sandbox
+        id: sandbox
+        uses: ./
+        with:
+          profile: platform
+          cluster-name: nebari-platform-test
+
+      - name: Await ArgoCD workloads
+        uses: jupyterhub/action-k8s-await-workloads@v3
+        with:
+          namespace: argocd
+          timeout: 300
+          max-restarts: 3
+
+      - name: Await MetalLB workloads
+        uses: jupyterhub/action-k8s-await-workloads@v3
+        with:
+          namespace: metallb-system
+          timeout: 300
+          # ArgoCD may sync the speaker DaemonSet before the metallb-memberlist
+          # Secret, causing a few restarts until the secret appears.
+          max-restarts: 10
+
+      - name: Await cert-manager workloads
+        uses: jupyterhub/action-k8s-await-workloads@v3
+        with:
+          namespace: cert-manager
+          timeout: 300
+          max-restarts: 3
+
+      - name: Await Envoy Gateway workloads
+        uses: jupyterhub/action-k8s-await-workloads@v3
+        with:
+          namespace: envoy-gateway-system
+          timeout: 300
+          max-restarts: 3
+
+      - name: Await Keycloak workloads
+        uses: jupyterhub/action-k8s-await-workloads@v3
+        with:
+          namespace: keycloak
+          timeout: 300
+          max-restarts: 5
+
+      - name: Debug cluster state
+        if: failure()
+        run: |
+          echo "=== Pods ==="
+          kubectl get pods -A || true
+
+          echo ""
+          echo "=== ArgoCD Applications ==="
+          kubectl get applications -n argocd -o wide || true
+
+          echo ""
+          echo "=== Recent warning events ==="
+          kubectl get events -A --field-selector type=Warning --sort-by='.lastTimestamp' 2>/dev/null | tail -30 || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
+          if [[ -n "${{ steps.sandbox.outputs.network-name }}" ]]; then
+            docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
+          fi
