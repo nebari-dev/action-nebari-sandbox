@@ -7,6 +7,10 @@ on:
       - README.md
       - .github/workflows/docs-check.yml
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: README in sync with action.yml
