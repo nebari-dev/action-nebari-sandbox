@@ -103,7 +103,13 @@ runs:
         # Wait for each platform namespace before snapshotting so the table
         # reflects steady-state usage, not a partially-deployed stack.
         for ns in argocd metallb-system cert-manager envoy-gateway-system keycloak; do
-          NAMESPACE="$ns" TIMEOUT=300 MAX_RESTARTS=-1 \
-            ${{ github.action_path }}/.github/actions/await-workloads/wait.sh
+          echo "=== Awaiting workloads in: $ns ==="
+          for kind in deployment daemonset statefulset; do
+            names=$(kubectl get "$kind" -n "$ns" --no-headers \
+              -o custom-columns=':metadata.name' 2>/dev/null || true)
+            for name in $names; do
+              kubectl rollout status "$kind/$name" -n "$ns" --timeout=300s
+            done
+          done
         done
         python3 ${{ github.action_path }}/scripts/resource-summary.py
