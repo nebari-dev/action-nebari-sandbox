@@ -38,7 +38,7 @@ Spin up a bare Kubernetes cluster for quick smoke tests:
 steps:
   - uses: actions/checkout@v6
 
-  - uses: nebari-dev/action-nebari-sandbox@main
+  - uses: nebari-dev/action-nebari-sandbox@v1
     id: sandbox
     with:
       profile: cluster-only
@@ -67,7 +67,7 @@ steps:
     with:
       go-version: "1.25"
 
-  - uses: nebari-dev/action-nebari-sandbox@main
+  - uses: nebari-dev/action-nebari-sandbox@v1
     id: sandbox
     with:
       profile: platform
