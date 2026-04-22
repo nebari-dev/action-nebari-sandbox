@@ -10,7 +10,7 @@ inputs:
     required: false
     default: "cluster-only"
   cluster-name:
-    description: "Name for the k3d cluster"
+    description: "Name for the k3d cluster (must be unique on the runner)"
     required: false
     default: "nebari-test"
   k8s-version:
