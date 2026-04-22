@@ -7,9 +7,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   test-cluster-only:
     name: "Test cluster-only profile"
@@ -86,14 +83,14 @@ jobs:
           resource-summary: "true"
 
       - name: Await ArgoCD workloads
-        uses: jupyterhub/action-k8s-await-workloads@v3
+        uses: ./.github/actions/await-workloads
         with:
           namespace: argocd
           timeout: 300
           max-restarts: 3
 
       - name: Await MetalLB workloads
-        uses: jupyterhub/action-k8s-await-workloads@v3
+        uses: ./.github/actions/await-workloads
         with:
           namespace: metallb-system
           timeout: 300
@@ -102,21 +99,21 @@ jobs:
           max-restarts: 10
 
       - name: Await cert-manager workloads
-        uses: jupyterhub/action-k8s-await-workloads@v3
+        uses: ./.github/actions/await-workloads
         with:
           namespace: cert-manager
           timeout: 300
           max-restarts: 3
 
       - name: Await Envoy Gateway workloads
-        uses: jupyterhub/action-k8s-await-workloads@v3
+        uses: ./.github/actions/await-workloads
         with:
           namespace: envoy-gateway-system
           timeout: 300
           max-restarts: 3
 
       - name: Await Keycloak workloads
-        uses: jupyterhub/action-k8s-await-workloads@v3
+        uses: ./.github/actions/await-workloads
         with:
           namespace: keycloak
           timeout: 300
