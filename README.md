@@ -26,7 +26,7 @@
 | Profile | What it does | Speed |
 |---------|-------------|-------|
 | `cluster-only` | k3d cluster + kubeconfig | ~15s |
-| `platform` | Full Nebari stack via NIC/ArgoCD (cert-manager, Envoy Gateway, Keycloak, MetalLB, nebari-operator) | ~5-10min |
+| `platform` | Full Nebari foundational stack via NIC/ArgoCD | ~5-10min |
 
 ## Usage
 

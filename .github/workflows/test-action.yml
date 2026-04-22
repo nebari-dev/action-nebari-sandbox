@@ -67,7 +67,13 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: nic-go-${{ runner.os }}-${{ hashFiles('.github/workflows/test-action.yml') }}
+          # install-nic.sh pins NIC_REPO and NIC_BRANCH; hashing it means the
+          # cache only busts when the build target actually changes, not on
+          # unrelated workflow edits. Trade-off: we miss cache invalidation
+          # when NIC_BRANCH receives new commits (no go.sum to hash since
+          # NIC is cloned fresh into /tmp). Acceptable — Go's incremental
+          # build handles modest churn cheaply.
+          key: nic-go-${{ runner.os }}-${{ hashFiles('scripts/install-nic.sh') }}
           restore-keys: |
             nic-go-${{ runner.os }}-
 

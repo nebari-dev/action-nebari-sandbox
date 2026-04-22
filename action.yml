@@ -6,7 +6,7 @@ inputs:
     description: >
       Deployment profile.
       - cluster-only: k3d cluster + kubeconfig, no NIC (fast, ~15s).
-      - platform: full foundational stack via NIC/ArgoCD (cert-manager, Envoy Gateway, Keycloak, nebari-operator).
+      - platform: full foundational stack via NIC/ArgoCD.
     required: false
     default: "cluster-only"
   cluster-name:
