@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Generate a markdown summary of cluster resource usage.
 
-Waits for ArgoCD Applications to reach Healthy/Synced, then reads pod and node
-info from the active kube context, formats a markdown table of CPU/memory
-requests and limits per pod plus node allocatable capacity, and appends it to
-$GITHUB_STEP_SUMMARY (or stdout if unset).
+Reads pod and node info from the active kube context, formats a markdown table
+of CPU/memory requests and limits per pod plus node allocatable capacity, and
+appends it to $GITHUB_STEP_SUMMARY (or stdout if unset).
+
+Intended to run after all namespace await steps have passed so the snapshot
+reflects steady-state resource consumption.
 
 Resource accounting follows Kubernetes' effective-request rule:
     effective_request = max(max(initContainers), sum(containers))
@@ -13,18 +15,12 @@ because init containers run sequentially before the regular ones.
 Pods in terminal phases (Succeeded/Failed) are excluded from totals — they
 no longer consume resources — but listed separately at the bottom for
 visibility.
-
-Knobs (env):
-- RESOURCE_SUMMARY_WAIT_TIMEOUT_S  default 600 — max seconds to wait for
-                                   ArgoCD apps to settle before snapshotting
-- RESOURCE_SUMMARY_POLL_INTERVAL_S default 10  — poll cadence while waiting
 """
 
 import json
 import os
 import subprocess
 import sys
-import time
 
 
 def cpu_to_millis(value):
@@ -91,67 +87,6 @@ def kubectl_json(*args):
     return json.loads(out)
 
 
-def _try_kubectl_json(*args):
-    """Like kubectl_json but returns None on failure (for polling loops)."""
-    try:
-        out = subprocess.check_output(
-            ["kubectl", *args, "-o", "json"], stderr=subprocess.PIPE
-        )
-        return json.loads(out)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
-
-
-def wait_for_argocd_apps(timeout_s, poll_interval_s):
-    """Poll until every ArgoCD Application is Healthy and Synced, or timeout.
-
-    On timeout, emits a GitHub Actions warning and returns; the caller
-    continues with whatever state exists. We don't hard-fail because a
-    partial snapshot is still useful, and the action's own await steps
-    will catch real deployment failures elsewhere.
-    """
-    deadline = time.time() + timeout_s
-    last_status_line = ""
-    while time.time() < deadline:
-        result = _try_kubectl_json("get", "applications.argoproj.io", "-A")
-        if result is None:
-            # ArgoCD CRDs not installed yet, or kubectl transient error.
-            sys.stderr.write("  waiting for ArgoCD CRDs...\n")
-            time.sleep(poll_interval_s)
-            continue
-
-        apps = result.get("items", [])
-        if not apps:
-            sys.stderr.write("  no ArgoCD Applications created yet...\n")
-            time.sleep(poll_interval_s)
-            continue
-
-        statuses = [
-            (
-                a["metadata"]["name"],
-                a.get("status", {}).get("health", {}).get("status", "?"),
-                a.get("status", {}).get("sync", {}).get("status", "?"),
-            )
-            for a in apps
-        ]
-        unsettled = [(n, h, s) for n, h, s in statuses if h != "Healthy" or s != "Synced"]
-
-        if not unsettled:
-            print(f"All {len(apps)} ArgoCD Applications are Healthy and Synced")
-            return
-
-        line = ", ".join(f"{n}({h}/{s})" for n, h, s in unsettled)
-        if line != last_status_line:
-            sys.stderr.write(f"  waiting on: {line}\n")
-            last_status_line = line
-        time.sleep(poll_interval_s)
-
-    sys.stderr.write(
-        f"::warning::Timed out after {timeout_s}s waiting for ArgoCD Applications "
-        f"to settle. Snapshot may be incomplete.\n"
-    )
-
-
 def pod_resources(pod):
     """Return [cpu_req_m, cpu_lim_m, mem_req_mib, mem_lim_mib] for a pod.
 
@@ -186,12 +121,6 @@ def pod_resources(pod):
 
 
 def main():
-    timeout_s = int(os.environ.get("RESOURCE_SUMMARY_WAIT_TIMEOUT_S", "600"))
-    poll_interval_s = int(os.environ.get("RESOURCE_SUMMARY_POLL_INTERVAL_S", "10"))
-
-    print(f"Waiting up to {timeout_s}s for ArgoCD Applications to settle...")
-    wait_for_argocd_apps(timeout_s, poll_interval_s)
-
     pods = kubectl_json("get", "pods", "-A")["items"]
     nodes = kubectl_json("get", "nodes")["items"]
 

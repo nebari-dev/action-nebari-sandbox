@@ -80,7 +80,6 @@ jobs:
         with:
           profile: platform
           cluster-name: nebari-platform-test
-          resource-summary: "true"
 
       - name: Await ArgoCD workloads
         uses: ./.github/actions/await-workloads
@@ -118,6 +117,9 @@ jobs:
           namespace: keycloak
           timeout: 300
           max-restarts: 5
+
+      - name: Generate resource summary
+        run: python3 scripts/resource-summary.py
 
       - name: Debug cluster state
         if: failure()
