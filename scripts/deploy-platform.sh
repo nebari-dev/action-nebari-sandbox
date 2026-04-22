@@ -12,12 +12,15 @@ project_name: ${CLUSTER_NAME}
 domain: nebari.local
 certificate:
   type: selfsigned
-kube_context: "k3d-${CLUSTER_NAME}"
 git_repository:
   url: "file://${GITOPS_DIR}"
   branch: main
 cluster:
   local:
+    # NIC's local provider reads kube_context from cluster.local.kube_context
+    # (not the top-level NebariConfig.kube_context, which is for "bring your
+    # own cluster" mode that skips infra provisioning).
+    kube_context: "k3d-${CLUSTER_NAME}"
     node_selectors:
       general:
         kubernetes.io/os: linux

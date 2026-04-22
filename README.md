@@ -26,7 +26,7 @@
 | Profile | What it does | Speed |
 |---------|-------------|-------|
 | `cluster-only` | k3d cluster + kubeconfig | ~15s |
-| `platform` | Full Nebari stack via NIC/ArgoCD (cert-manager, Envoy Gateway, Keycloak, MetalLB, nebari-operator) | ~5-10min |
+| `platform` | Full Nebari foundational stack via NIC/ArgoCD | ~5-10min |
 
 ## Usage
 
@@ -36,9 +36,9 @@ Spin up a bare Kubernetes cluster for quick smoke tests:
 
 ```yaml
 steps:
-  - uses: actions/checkout@v4
+  - uses: actions/checkout@v6
 
-  - uses: nebari-dev/action-nebari-sandbox@v1
+  - uses: nebari-dev/action-nebari-sandbox@main
     id: sandbox
     with:
       profile: cluster-only
@@ -49,6 +49,10 @@ steps:
       # your tests here
     env:
       KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+
+  - name: Cleanup
+    if: always()
+    run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
 ```
 
 ### platform
@@ -59,9 +63,9 @@ Deploy the full Nebari foundational stack for integration testing:
 steps:
   - uses: actions/checkout@v6
 
-  - uses: actions/setup-go@v5
+  - uses: actions/setup-go@v6
     with:
-      go-version: "1.24"
+      go-version: "1.25"
 
   - uses: nebari-dev/action-nebari-sandbox@main
     id: sandbox
@@ -69,8 +73,15 @@ steps:
       profile: platform
 
   - name: Run integration tests
+    env:
+      KEYCLOAK_ADMIN_PASSWORD: ${{ steps.sandbox.outputs.keycloak-admin-password }}
+      ARGOCD_ADMIN_PASSWORD: ${{ steps.sandbox.outputs.argocd-admin-password }}
+      GATEWAY_IP: ${{ steps.sandbox.outputs.gateway-ip }}
     run: |
       kubectl get applications -n argocd
+      # Reach the gateway from inside the runner:
+      curl -sk --resolve "keycloak.nebari.local:443:${GATEWAY_IP}" \
+        https://keycloak.nebari.local/realms/master/.well-known/openid-configuration
       # your integration tests here
 
   - name: Cleanup
@@ -92,6 +103,7 @@ steps:
 | `cluster-name` | Name for the k3d cluster | `nebari-test` |
 | `k8s-version` | Kubernetes version | `1.32.4` |
 | `k3d-version` | k3d version to install | `5.8.3` |
+| `resource-summary` | When `"true"` (and `profile: platform`), append a markdown table of pod resource requests/limits and node allocatable capacity to `$GITHUB_STEP_SUMMARY`. Useful for tracking minimum-spec requirements. | `"false"` |
 
 ## Outputs
 
@@ -126,7 +138,7 @@ The action does not automatically delete the cluster. Add a cleanup step to your
 ## Requirements
 
 - **Both profiles:** `ubuntu-24.04` (or `ubuntu-latest`) runner with Docker (pre-installed on GitHub-hosted runners)
-- **`platform` profile:** Go 1.24+ (use `actions/setup-go@v5`) — NIC is built from source until a release with `file://` git support is available
+- **`platform` profile:** Go 1.25+ (use `actions/setup-go@v6`) — NIC is built from source until a release with `file://` git support is available
 
 ## License
 

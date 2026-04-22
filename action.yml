@@ -6,7 +6,7 @@ inputs:
     description: >
       Deployment profile.
       - cluster-only: k3d cluster + kubeconfig, no NIC (fast, ~15s).
-      - platform: full foundational stack via NIC/ArgoCD (cert-manager, Envoy Gateway, Keycloak, nebari-operator).
+      - platform: full foundational stack via NIC/ArgoCD.
     required: false
     default: "cluster-only"
   cluster-name:
@@ -21,6 +21,14 @@ inputs:
     description: "k3d version to install"
     required: false
     default: "5.8.3"
+  resource-summary:
+    description: >
+      When 'true' (and profile is 'platform'), append a markdown table of
+      pod resource requests/limits and node allocatable capacity to
+      $GITHUB_STEP_SUMMARY after the platform stack is up. Useful for
+      tracking minimum-spec requirements as the foundational stack evolves.
+    required: false
+    default: "false"
   # nic-version:
   #   description: "NIC version — release tag (e.g. v0.1.0) or branch name"
   #   required: false
@@ -87,3 +95,15 @@ runs:
       id: extract-outputs
       shell: bash
       run: ${{ github.action_path }}/scripts/extract-outputs.sh
+
+    - name: Await platform workloads
+      if: inputs.profile == 'platform'
+      shell: bash
+      run: ${{ github.action_path }}/scripts/wait-platform.sh
+      env:
+        AWAIT_TIMEOUT: "300"
+
+    - name: Generate resource summary
+      if: inputs.profile == 'platform' && inputs.resource-summary == 'true'
+      shell: bash
+      run: python3 ${{ github.action_path }}/scripts/resource-summary.py

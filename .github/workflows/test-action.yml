@@ -7,9 +7,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   test-cluster-only:
     name: "Test cluster-only profile"
@@ -53,18 +50,27 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: "1.24"
+          # NIC's go.mod tracks the latest stable Go release.
+          # setup-go@v6 sets GOTOOLCHAIN=local by default, so the installed
+          # version must already satisfy the go.mod directive.
+          go-version: "1.25"
           cache: false
 
       - name: Cache NIC Go modules and build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: nic-go-${{ runner.os }}-${{ hashFiles('.github/workflows/test-action.yml') }}
+          # install-nic.sh pins NIC_REPO and NIC_BRANCH; hashing it means the
+          # cache only busts when the build target actually changes, not on
+          # unrelated workflow edits. Trade-off: we miss cache invalidation
+          # when NIC_BRANCH receives new commits (no go.sum to hash since
+          # NIC is cloned fresh into /tmp). Acceptable — Go's incremental
+          # build handles modest churn cheaply.
+          key: nic-go-${{ runner.os }}-${{ hashFiles('scripts/install-nic.sh') }}
           restore-keys: |
             nic-go-${{ runner.os }}-
 
@@ -74,43 +80,7 @@ jobs:
         with:
           profile: platform
           cluster-name: nebari-platform-test
-
-      - name: Await ArgoCD workloads
-        uses: jupyterhub/action-k8s-await-workloads@v3
-        with:
-          namespace: argocd
-          timeout: 300
-          max-restarts: 3
-
-      - name: Await MetalLB workloads
-        uses: jupyterhub/action-k8s-await-workloads@v3
-        with:
-          namespace: metallb-system
-          timeout: 300
-          # ArgoCD may sync the speaker DaemonSet before the metallb-memberlist
-          # Secret, causing a few restarts until the secret appears.
-          max-restarts: 10
-
-      - name: Await cert-manager workloads
-        uses: jupyterhub/action-k8s-await-workloads@v3
-        with:
-          namespace: cert-manager
-          timeout: 300
-          max-restarts: 3
-
-      - name: Await Envoy Gateway workloads
-        uses: jupyterhub/action-k8s-await-workloads@v3
-        with:
-          namespace: envoy-gateway-system
-          timeout: 300
-          max-restarts: 3
-
-      - name: Await Keycloak workloads
-        uses: jupyterhub/action-k8s-await-workloads@v3
-        with:
-          namespace: keycloak
-          timeout: 300
-          max-restarts: 5
+          resource-summary: "true"
 
       - name: Debug cluster state
         if: failure()
