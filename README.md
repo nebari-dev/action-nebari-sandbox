@@ -111,7 +111,7 @@ steps:
 | name | description | required | default |
 | --- | --- | --- | --- |
 | `profile` | <p>Deployment profile. - cluster-only: k3d cluster + kubeconfig, no NIC (fast, ~15s). - platform: full foundational stack via NIC/ArgoCD.</p> | `false` | `cluster-only` |
-| `cluster-name` | <p>Name for the k3d cluster</p> | `false` | `nebari-test` |
+| `cluster-name` | <p>Name for the k3d cluster (must be unique on the runner)</p> | `false` | `nebari-test` |
 | `k8s-version` | <p>Kubernetes version to use (maps to a k3d image tag)</p> | `false` | `1.32.4` |
 | `k3d-version` | <p>k3d version to install</p> | `false` | `5.8.3` |
 | `resource-summary` | <p>When 'true' (and profile is 'platform'), append a markdown table of pod resource requests/limits and node allocatable capacity to $GITHUB<em>STEP</em>SUMMARY after the platform stack is up. Useful for tracking minimum-spec requirements as the foundational stack evolves.</p> | `false` | `false` |
