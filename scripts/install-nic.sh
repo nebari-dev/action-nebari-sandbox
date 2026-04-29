@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build NIC from the local_git branch which adds file:// git support
-# required for local ArgoCD deployments (nebari-dev/nebari-infrastructure-core#136).
+# Build NIC from main. file:// git support (nebari-dev/nebari-infrastructure-core#136)
+# was merged into main on 2026-04-29 and the local_git branch was deleted.
+# TODO: switch to downloading a pre-built binary once a NIC release ships
+#       that includes PR #136 (track: nebari-dev/action-nebari-sandbox#12).
 NIC_REPO="https://github.com/nebari-dev/nebari-infrastructure-core.git"
-NIC_BRANCH="local_git"
+NIC_BRANCH="main"
 NIC_SRC="/tmp/nebari-infrastructure-core"
 
 echo "::group::Install NIC (branch: ${NIC_BRANCH})"
