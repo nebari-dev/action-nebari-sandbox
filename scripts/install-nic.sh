@@ -21,6 +21,6 @@ cd "${NIC_SRC}"
 CGO_ENABLED=0 go build -trimpath -o /usr/local/bin/nic ./cmd/nic
 
 echo "NIC installed at $(which nic)"
-nic version || true
+nic version
 
 echo "::endgroup::"
