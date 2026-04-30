@@ -79,7 +79,14 @@ kill "${CHMOD_PID}" 2>/dev/null || true
 # last to have their images pulled and start running inside the k3s nodes.
 if [[ "${NEBARI_TIMING_REPORT:-false}" == "true" ]]; then
   echo "::group::Collect container start timestamps (timing instrumentation)"
-  kubectl get pods -A -o json | python3 - << 'PYEOF'
+  # Save kubectl output to a temp file first — piping kubectl directly into
+  # `python3 - << 'HEREDOC'` causes a stdin conflict (the heredoc overrides
+  # the pipe for Python's stdin, leaving json.load(sys.stdin) with empty input).
+  _pods_tmp=$(mktemp /tmp/pods-json-XXXXXX)
+  kubectl get pods -A -o json > "${_pods_tmp}" 2>/dev/null \
+    || echo '{"items":[]}' > "${_pods_tmp}"
+  {
+    PODS_TMP_FILE="${_pods_tmp}" python3 << 'PYEOF'
 import json, os, sys
 from datetime import datetime, timezone
 
@@ -99,7 +106,17 @@ if nic_start_ms is None:
     print("Could not find nic deploy start time in timing file, skipping.")
     sys.exit(0)
 
-pods = json.load(sys.stdin)["items"]
+pods_file = os.environ.get("PODS_TMP_FILE", "")
+if not pods_file or not os.path.exists(pods_file):
+    print("No pod data file available, skipping.")
+    sys.exit(0)
+
+try:
+    with open(pods_file) as fh:
+        pods = json.load(fh)["items"]
+except (json.JSONDecodeError, KeyError):
+    print("Failed to parse pod data, skipping.")
+    sys.exit(0)
 
 # Collect the FIRST container-ready time per namespace
 ns_first: dict[str, int] = {}
@@ -122,6 +139,8 @@ with open(timing_file, "a") as fh:
         fh.write(f"first container ready: {ns}\t{start_ms}\t{end_ms}\n")
         print(f"  {delay_ms:>8}ms  {ns}")
 PYEOF
+  } || echo "Warning: container start timestamp collection failed (non-fatal)"
+  rm -f "${_pods_tmp}"
   echo "::endgroup::"
 fi
 
