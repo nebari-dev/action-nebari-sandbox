@@ -29,6 +29,14 @@ inputs:
       tracking minimum-spec requirements as the foundational stack evolves.
     required: false
     default: "false"
+  timing-report:
+    description: >
+      When 'true', record wall-clock durations for key phases (k3s image pull,
+      k3d cluster create, nic deploy, etc.) and append a markdown timing table
+      to $GITHUB_STEP_SUMMARY. Works with both profiles. Intended for benchmarking
+      and profiling CI runs; has no effect on normal operation when 'false'.
+    required: false
+    default: "false"
   # nic-version:
   #   description: "NIC version — release tag (e.g. v0.1.0) or branch name"
   #   required: false
@@ -89,6 +97,7 @@ runs:
       env:
         CLUSTER_NAME: ${{ inputs.cluster-name }}
         GITOPS_DIR: ${{ steps.create-cluster.outputs.gitops-dir }}
+        NEBARI_TIMING_REPORT: ${{ inputs.timing-report }}
 
     - name: Extract platform outputs
       if: inputs.profile == 'platform'
@@ -107,3 +116,10 @@ runs:
       if: inputs.profile == 'platform' && inputs.resource-summary == 'true'
       shell: bash
       run: python3 ${{ github.action_path }}/scripts/resource-summary.py
+
+    - name: Generate timing report
+      if: inputs.timing-report == 'true'
+      shell: bash
+      run: python3 ${{ github.action_path }}/scripts/timing-report.py
+      env:
+        CLUSTER_NAME: ${{ inputs.cluster-name }}
