@@ -31,8 +31,10 @@ NETWORK_NAME="nebari-${CLUSTER_NAME}-net"
 GITOPS_DIR="/tmp/nebari-gitops-${CLUSTER_NAME}"
 
 if [[ "${PROFILE}" == "platform" ]]; then
-  # NIC's local provider uses MetalLB with a hardcoded 192.168.1.100-110 pool.
-  # Create a Docker network matching that subnet so MetalLB IPs are routable.
+  # Create a Docker network matching the MetalLB address pool configured in
+  # deploy-platform.sh (192.168.1.100-110) so MetalLB IPs are routable from
+  # the runner. The subnet and pool are kept in sync between this file and the
+  # NIC config (cluster.local.metallb.address_pool).
   if ! docker network inspect "${NETWORK_NAME}" &>/dev/null; then
     echo "Creating Docker network '${NETWORK_NAME}' (192.168.1.0/24)..."
     docker network create --subnet 192.168.1.0/24 --gateway 192.168.1.1 "${NETWORK_NAME}"
@@ -58,26 +60,6 @@ kubectl cluster-info
 kubectl get nodes -o wide
 
 echo "::endgroup::"
-
-if [[ "${PROFILE}" == "platform" ]]; then
-  echo "::group::Create 'standard' StorageClass (workaround)"
-
-  # NIC's local provider hardcodes StorageClass "standard", but k3s only ships
-  # "local-path". Create a "standard" class backed by the same provisioner.
-  # TODO: Remove once nebari-dev/nebari-infrastructure-core#201 merges and
-  #       NIC supports configuring storage_class per provider.
-  kubectl apply -f - <<'SC'
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: standard
-provisioner: rancher.io/local-path
-reclaimPolicy: Delete
-volumeBindingMode: WaitForFirstConsumer
-SC
-
-  echo "::endgroup::"
-fi
 
 # Set outputs
 KUBECONFIG_PATH="${HOME}/.kube/config"

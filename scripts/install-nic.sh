@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build NIC from main. file:// git support (nebari-dev/nebari-infrastructure-core#136)
-# was merged into main on 2026-04-29 and the local_git branch was deleted.
+# Build NIC from the feature/local-configurable-infra-settings branch, which
+# makes StorageClass, MetalLB, and https_port configurable in the local provider
+# config (nebari-dev/nebari-infrastructure-core#201).
+#
+# This branch is pinned here to provide an integration test environment for
+# NIC PR #201 review. Once that PR merges into main (and eventually a new NIC
+# release ships), this should be updated back to main / a tagged release.
 # TODO: switch to downloading a pre-built binary once a NIC release ships
-#       that includes PR #136 (track: nebari-dev/action-nebari-sandbox#12).
+#       that includes PR #136 and PR #201 (track: nebari-dev/action-nebari-sandbox#12).
 NIC_REPO="https://github.com/nebari-dev/nebari-infrastructure-core.git"
-NIC_BRANCH="main"
+NIC_BRANCH="feature/local-configurable-infra-settings"
 NIC_SRC="/tmp/nebari-infrastructure-core"
 
 echo "::group::Install NIC (branch: ${NIC_BRANCH})"

@@ -21,6 +21,14 @@ cluster:
     # (not the top-level NebariConfig.kube_context, which is for "bring your
     # own cluster" mode that skips infra provisioning).
     kube_context: "k3d-${CLUSTER_NAME}"
+    # k3s ships "local-path" not "standard"; tell NIC to use it directly so we
+    # don't need to create a fake "standard" StorageClass as a workaround.
+    # Requires nebari-dev/nebari-infrastructure-core#201.
+    storage_class: local-path
+    # Explicitly declare the MetalLB pool so it matches the Docker network
+    # subnet (192.168.1.0/24) created in create-cluster.sh.
+    metallb:
+      address_pool: 192.168.1.100-192.168.1.110
     node_selectors:
       general:
         kubernetes.io/os: linux
