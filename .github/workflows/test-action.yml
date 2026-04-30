@@ -25,6 +25,7 @@ jobs:
         with:
           profile: cluster-only
           cluster-name: test-cluster
+          timing-report: "true"
 
       - name: Verify cluster is functional
         run: |
@@ -85,6 +86,7 @@ jobs:
           profile: platform
           cluster-name: nebari-platform-test
           resource-summary: "true"
+          timing-report: "true"
 
       - name: Debug cluster state
         if: failure()
