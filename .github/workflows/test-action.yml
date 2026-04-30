@@ -85,6 +85,7 @@ jobs:
           profile: platform
           cluster-name: nebari-platform-test
           resource-summary: "true"
+          timing-report: "true"
 
       - name: Debug cluster state
         if: failure()
