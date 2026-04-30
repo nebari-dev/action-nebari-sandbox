@@ -115,6 +115,7 @@ steps:
 | `k8s-version` | <p>Kubernetes version to use (maps to a k3d image tag)</p> | `false` | `1.32.4` |
 | `k3d-version` | <p>k3d version to install</p> | `false` | `5.8.3` |
 | `resource-summary` | <p>When 'true' (and profile is 'platform'), append a markdown table of pod resource requests/limits and node allocatable capacity to $GITHUB<em>STEP</em>SUMMARY after the platform stack is up. Useful for tracking minimum-spec requirements as the foundational stack evolves.</p> | `false` | `false` |
+| `timing-report` | <p>When 'true', record wall-clock durations for key phases (k3s image pull, k3d cluster create, nic deploy, etc.) and append a markdown timing table to $GITHUB<em>STEP</em>SUMMARY. Works with both profiles. Intended for benchmarking and profiling CI runs; has no effect on normal operation when 'false'.</p> | `false` | `false` |
 <!-- action-docs-inputs action="action.yml" -->
 
 <!-- action-docs-outputs action="action.yml" -->
