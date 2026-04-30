@@ -5,6 +5,14 @@ CLUSTER_NAME="${CLUSTER_NAME:?CLUSTER_NAME is required}"
 K8S_VERSION="${K8S_VERSION:?K8S_VERSION is required}"
 PROFILE="${PROFILE:-cluster-only}"
 
+# ── timing helpers ────────────────────────────────────────────────────────────
+_TIMING_FILE="/tmp/nebari-timing-${CLUSTER_NAME}.tsv"
+_now_ms()        { date +%s%3N; }
+_record_timing() {          # label start_ms end_ms
+  printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "${_TIMING_FILE}"
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
 echo "::group::Create k3d cluster '${CLUSTER_NAME}' (profile: ${PROFILE})"
 
 # Delete the cluster if it already exists (idempotent re-runs)
@@ -44,14 +52,34 @@ if [[ "${PROFILE}" == "platform" ]]; then
   K3D_ARGS+=(--volume "${GITOPS_DIR}:${GITOPS_DIR}")
 fi
 
+# When timing instrumentation is requested, pre-pull the k3s image explicitly
+# so we can separate pull latency from cluster initialisation time.
+if [[ "${NEBARI_TIMING_REPORT:-false}" == "true" ]]; then
+  echo "::group::Pre-pull k3s image (timing instrumentation)"
+  _t0=$(_now_ms)
+  docker pull "rancher/k3s:v${K8S_VERSION}-k3s1"
+  _t1=$(_now_ms)
+  _record_timing "k3s image pull (docker hub)" "${_t0}" "${_t1}"
+  echo "k3s image pull: $(( (_t1 - _t0) / 1000 ))s"
+  echo "::endgroup::"
+fi
+
+_k3d_start=$(_now_ms)
 k3d cluster create "${CLUSTER_NAME}" "${K3D_ARGS[@]}"
+if [[ "${NEBARI_TIMING_REPORT:-false}" == "true" ]]; then
+  _record_timing "k3d cluster create" "${_k3d_start}" "$(_now_ms)"
+fi
 
 echo "::endgroup::"
 
 echo "::group::Verify cluster is ready"
 
 # Wait for all nodes to be Ready
+_kw_start=$(_now_ms)
 kubectl wait --for=condition=Ready nodes --all --timeout=60s
+if [[ "${NEBARI_TIMING_REPORT:-false}" == "true" ]]; then
+  _record_timing "kubectl wait nodes ready" "${_kw_start}" "$(_now_ms)"
+fi
 
 # Show cluster info
 kubectl cluster-info
