@@ -29,6 +29,16 @@ inputs:
       tracking minimum-spec requirements as the foundational stack evolves.
     required: false
     default: "false"
+  argocd-self-heal:
+    description: >
+      Platform profile only. Controls ArgoCD's automated selfHeal on the
+      foundational Application set. Defaults to 'true' to match NIC's
+      production behavior. Set to 'false' for ephemeral CI clusters where
+      tests need to mutate platform state (e.g. 'kubectl set image' to swap
+      in a dev build) without ArgoCD reverting the change on its next
+      reconcile cycle. Has no effect when profile is 'cluster-only'.
+    required: false
+    default: "true"
   # nic-version:
   #   description: "NIC version — release tag (e.g. v0.1.0) or branch name"
   #   required: false
@@ -102,6 +112,11 @@ runs:
       run: ${{ github.action_path }}/scripts/wait-platform.sh
       env:
         AWAIT_TIMEOUT: "300"
+
+    - name: Disable ArgoCD self-heal
+      if: inputs.profile == 'platform' && inputs.argocd-self-heal == 'false'
+      shell: bash
+      run: ${{ github.action_path }}/scripts/disable-argocd-self-heal.sh
 
     - name: Generate resource summary
       if: inputs.profile == 'platform' && inputs.resource-summary == 'true'

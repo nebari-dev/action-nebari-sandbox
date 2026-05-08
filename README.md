@@ -115,6 +115,7 @@ steps:
 | `k8s-version` | <p>Kubernetes version to use (maps to a k3d image tag)</p> | `false` | `1.32.4` |
 | `k3d-version` | <p>k3d version to install</p> | `false` | `5.8.3` |
 | `resource-summary` | <p>When 'true' (and profile is 'platform'), append a markdown table of pod resource requests/limits and node allocatable capacity to $GITHUB<em>STEP</em>SUMMARY after the platform stack is up. Useful for tracking minimum-spec requirements as the foundational stack evolves.</p> | `false` | `false` |
+| `argocd-self-heal` | <p>Platform profile only. Controls ArgoCD's automated selfHeal on the foundational Application set. Defaults to 'true' to match NIC's production behavior. Set to 'false' for ephemeral CI clusters where tests need to mutate platform state (e.g. 'kubectl set image' to swap in a dev build) without ArgoCD reverting the change on its next reconcile cycle. Has no effect when profile is 'cluster-only'.</p> | `false` | `true` |
 <!-- action-docs-inputs action="action.yml" -->
 
 <!-- action-docs-outputs action="action.yml" -->
