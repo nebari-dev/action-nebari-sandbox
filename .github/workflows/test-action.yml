@@ -86,6 +86,11 @@ jobs:
           cluster-name: nebari-platform-test
           resource-summary: "true"
 
+      - name: Run scenarios
+        run: bash tests/run-scenarios.sh
+        env:
+          KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+
       - name: Debug cluster state
         if: failure()
         run: |
