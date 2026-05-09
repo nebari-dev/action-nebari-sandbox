@@ -63,7 +63,12 @@ CHMOD_PID=$!
 trap "kill ${CHMOD_PID} 2>/dev/null || true" EXIT
 
 _nic_start=$(_now_ms)
-nic deploy -f "${CONFIG_FILE}" --timeout 15m
+# Tee NIC's structured JSON logs to a file so collect-deploy-timings.py can
+# parse phase pairs ("Installing Argo CD" → "Argo CD installed", etc.) for
+# the per-phase NIC breakdown. Tee is a no-op when timing-report is off
+# (file just sits in /tmp). pipefail (set above) preserves nic's exit code.
+_NIC_LOG_FILE="/tmp/nic-deploy-${CLUSTER_NAME}.log"
+nic deploy -f "${CONFIG_FILE}" --timeout 15m 2>&1 | tee "${_NIC_LOG_FILE}"
 if [[ "${NEBARI_TIMING_REPORT:-false}" == "true" ]]; then
   _nic_end=$(_now_ms)
   _record_timing "nic deploy (total)" "${_nic_start}" "${_nic_end}"
@@ -82,9 +87,9 @@ kill "${CHMOD_PID}" 2>/dev/null || true
 # container startup into one number, which couldn't drive build-vs-buy
 # decisions on caching.
 if [[ "${NEBARI_TIMING_REPORT:-false}" == "true" ]]; then
-  echo "::group::Collect deploy-phase timings (image pulls + ArgoCD syncs)"
+  echo "::group::Collect deploy-phase timings (NIC phases + image pulls + ArgoCD syncs)"
   python3 "$(dirname "$0")/collect-deploy-timings.py" \
-    "${_TIMING_FILE}" "${_nic_start}" \
+    "${_TIMING_FILE}" "${_nic_start}" "${_NIC_LOG_FILE}" \
     || echo "Warning: deploy-phase timing collection failed (non-fatal)"
   echo "::endgroup::"
 fi

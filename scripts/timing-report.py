@@ -22,6 +22,7 @@ from pathlib import Path
 
 _IMAGE_PULL_PREFIX = "image-pull: "
 _ARGOCD_SYNC_PREFIX = "argocd-sync: "
+_NIC_PHASE_PREFIX = "nic-phase: "
 
 
 def fmt_duration(ms: int) -> str:
@@ -48,6 +49,26 @@ def _render_phase_table(rows: list[tuple[str, int]]) -> list[str]:
         lines.append(f"| {label} | {fmt_duration(duration)} |")
     total = sum(d for _, d in rows)
     lines.append(f"| **Total** | **{fmt_duration(total)}** |")
+    lines.append("")
+    return lines
+
+
+def _render_nic_phases(rows: list[tuple[str, int]]) -> list[str]:
+    lines = [
+        "### NIC internal phases (parsed from `nic deploy` JSON logs)",
+        "",
+        "| Phase | Duration |",
+        "|---|---|",
+    ]
+    parsed = [(_strip_prefix(label, _NIC_PHASE_PREFIX), duration) for label, duration in rows]
+    # Preserve insertion order — already chronological from collect-deploy-timings.py
+    for phase, duration in parsed:
+        lines.append(f"| {phase} | {fmt_duration(duration)} |")
+    lines.append("")
+    lines.append(
+        f"> {len(parsed)} phase pair(s) extracted from NIC's structured stdout log "
+        "(start/end `msg` markers paired by exact match)."
+    )
     lines.append("")
     return lines
 
@@ -106,6 +127,7 @@ def main() -> None:
         return
 
     phases: list[tuple[str, int]] = []
+    nic_phases: list[tuple[str, int]] = []
     pulls: list[tuple[str, int]] = []
     syncs: list[tuple[str, int]] = []
 
@@ -122,16 +144,20 @@ def main() -> None:
             pulls.append((label, duration))
         elif label.startswith(_ARGOCD_SYNC_PREFIX):
             syncs.append((label, duration))
+        elif label.startswith(_NIC_PHASE_PREFIX):
+            nic_phases.append((label, duration))
         else:
             phases.append((label, duration))
 
-    if not (phases or pulls or syncs):
+    if not (phases or nic_phases or pulls or syncs):
         print("Timing file is empty - nothing to report.")
         return
 
     lines: list[str] = ["## CI Timing Report", ""]
     if phases:
         lines.extend(_render_phase_table(phases))
+    if nic_phases:
+        lines.extend(_render_nic_phases(nic_phases))
     if pulls:
         lines.extend(_render_image_pulls(pulls))
     if syncs:
@@ -142,10 +168,11 @@ def main() -> None:
     if summary_path:
         with open(summary_path, "a") as fh:
             fh.write(output)
-        total = len(phases) + len(pulls) + len(syncs)
+        total = len(phases) + len(nic_phases) + len(pulls) + len(syncs)
         print(
             f"Wrote timing report to $GITHUB_STEP_SUMMARY "
-            f"({len(phases)} phases, {len(pulls)} pulls, {len(syncs)} syncs; {total} entries)"
+            f"({len(phases)} phases, {len(nic_phases)} nic-phases, "
+            f"{len(pulls)} pulls, {len(syncs)} syncs; {total} entries)"
         )
     else:
         sys.stdout.write(output)

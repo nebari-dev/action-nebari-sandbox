@@ -19,6 +19,9 @@ trap cleanup EXIT
 # Use deterministic values so we can grep for exact durations.
 cat > "${TIMING_FILE}" <<'EOF'
 nic deploy (total)	1000000	1142000
+nic-phase: gitops bootstrap	1001000	1003500
+nic-phase: argocd install	1003500	1015000
+nic-phase: foundational install	1015000	1140000
 image-pull: keycloak/keycloak/keycloak:25.0	1010000	1023200
 image-pull: argocd/argoproj/argocd:v2.13.0	1010000	1014200
 argocd-sync: keycloak	1050000	1073400
@@ -44,8 +47,18 @@ assert_contains() {
 
 assert_contains "## CI Timing Report"
 assert_contains "### Phases"
+assert_contains "### NIC internal phases"
 assert_contains "### Image pulls"
 assert_contains "### ArgoCD app sync convergence"
+
+# NIC phases preserve insertion (chronological) order: gitops → argocd → foundational
+gitops_line=$(grep -nE "^\| gitops bootstrap \|" "${SUMMARY_FILE}" | head -1 | cut -d: -f1)
+argocd_install_line=$(grep -nE "^\| argocd install \|" "${SUMMARY_FILE}" | head -1 | cut -d: -f1)
+foundational_line=$(grep -nE "^\| foundational install \|" "${SUMMARY_FILE}" | head -1 | cut -d: -f1)
+if ! { [[ "${gitops_line}" -lt "${argocd_install_line}" ]] && [[ "${argocd_install_line}" -lt "${foundational_line}" ]]; }; then
+  echo "ASSERT FAILED: NIC phases not in chronological order"
+  exit 1
+fi
 
 # Phase row + total
 assert_contains "| nic deploy (total) | 2m 22s |"
