@@ -85,6 +85,7 @@ jobs:
           profile: platform
           cluster-name: nebari-platform-test
           resource-summary: "true"
+          timing-report: "true"
 
       - name: Run scenarios
         run: bash tests/run-scenarios.sh
