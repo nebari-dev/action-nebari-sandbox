@@ -79,19 +79,9 @@ chmod -R a+rX "${GITOPS_DIR}"
 
 kill "${CHMOD_PID}" 2>/dev/null || true
 
-# When timing instrumentation is on, decompose the `nic deploy` total into
-# the cost categories called out in #17: per-image pull cost (parsed from
-# kubelet `Pulled` events) and ArgoCD per-Application sync convergence
-# (parsed from `status.operationState`). The earlier "first container ready
-# per namespace" approach conflated pull + scheduling + initContainer +
-# container startup into one number, which couldn't drive build-vs-buy
-# decisions on caching.
-if [[ "${NEBARI_TIMING_REPORT:-false}" == "true" ]]; then
-  echo "::group::Collect deploy-phase timings (NIC phases + image pulls + ArgoCD syncs)"
-  python3 "$(dirname "$0")/collect-deploy-timings.py" \
-    "${_TIMING_FILE}" "${_nic_start}" "${_NIC_LOG_FILE}" \
-    || echo "Warning: deploy-phase timing collection failed (non-fatal)"
-  echo "::endgroup::"
-fi
+# Deploy-phase timing collection (kubelet Pulled events, ArgoCD app sync,
+# NIC log phase parsing) runs as a dedicated post-await step in action.yml
+# so all foundational Applications have had time to converge before we read
+# their `status.operationState`.
 
 echo "::endgroup::"
