@@ -38,6 +38,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -159,6 +160,41 @@ def collect_nic_phases(nic_log_path: Path) -> list[tuple[str, int, int]]:
     return rows
 
 
+def wait_for_application_syncs(timeout_s: int = 90, poll_interval_s: int = 3) -> None:
+    """Block until every Application has a complete most-recent sync.
+
+    `wait-platform.sh` waits for Deployments/StatefulSets to be Ready, but an
+    Application's `status.operationState` can still be in-flight after that —
+    e.g. keycloak's post-sync realm-setup Job, or nebari-landingpage which
+    syncs after keycloak is up. Without this poll, those apps are missed
+    because their `operationState.finishedAt` is unset when we collect.
+    """
+    deadline = time.time() + timeout_s
+    last_pending: list[str] = []
+    while time.time() < deadline:
+        apps = _kubectl_json(["get", "application", "-n", "argocd"]).get("items", []) or []
+        if not apps:
+            return
+        pending = []
+        for app in apps:
+            op = ((app.get("status") or {}).get("operationState") or {})
+            if not op.get("finishedAt"):
+                pending.append((app.get("metadata") or {}).get("name", "?"))
+        if not pending:
+            print(f"All {len(apps)} Applications have completed their sync.")
+            return
+        if pending != last_pending:
+            print(f"Waiting on {len(pending)} Application(s): {', '.join(sorted(pending))}")
+            last_pending = pending
+        time.sleep(poll_interval_s)
+    print(
+        f"Timeout after {timeout_s}s waiting for Application syncs "
+        f"({len(last_pending)} still pending: {', '.join(sorted(last_pending))}). "
+        "Proceeding with partial data.",
+        file=sys.stderr,
+    )
+
+
 def collect_argocd_syncs() -> list[tuple[str, int, int]]:
     """Return [(label, start_ms, end_ms), ...] for each ArgoCD Application's most recent sync."""
     apps = _kubectl_json(
@@ -203,6 +239,10 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(0)
+
+    # Block until every Application has a settled operationState; otherwise
+    # keycloak / nebari-landingpage / other slow syncers get filtered out.
+    wait_for_application_syncs()
 
     nic_phases = collect_nic_phases(nic_log_path)
     pulls = collect_image_pulls(nic_start_ms)
