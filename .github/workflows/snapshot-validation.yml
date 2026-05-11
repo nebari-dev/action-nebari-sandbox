@@ -1,0 +1,114 @@
+name: Snapshot validation (issue #33 follow-up)
+
+# Validates the assumptions made in the conclusion comment on #33:
+#
+# - compression-sweep: measures real impact of crictl rmi --prune and
+#   different zstd configurations on snapshot size and de/compression time.
+# - reconcile-timing: measures how long after `cluster Ready` until all 14
+#   foundational ArgoCD Applications converge to Synced + Healthy and all
+#   pods reach Running. Adds the missing component of the end-to-end
+#   "consumer cost" number.
+#
+# Triggered manually or on PRs touching the validation-specific files.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/experiment-*.sh'
+      - '.github/workflows/snapshot-validation.yml'
+
+jobs:
+  compression-sweep:
+    name: "Compression sweep (crictl prune + zstd variants)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: false
+
+      - name: Cache NIC Go modules and build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: nic-go-${{ runner.os }}-${{ hashFiles('scripts/install-nic.sh') }}
+          restore-keys: |
+            nic-go-${{ runner.os }}-
+
+      - name: Setup Nebari Sandbox (normal flow)
+        uses: ./
+        with:
+          profile: platform
+          cluster-name: spike
+
+      - name: Run compression sweep
+        run: bash scripts/experiment-compression-sweep.sh spike /tmp/compression
+
+      - name: Upload results TSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: compression-results
+          path: /tmp/compression/compression-results.tsv
+          retention-days: 7
+
+      - name: Cleanup
+        if: always()
+        run: |
+          k3d cluster delete spike 2>/dev/null || true
+          docker network rm nebari-spike-net 2>/dev/null || true
+
+  reconcile-timing:
+    name: "Reconcile timing (post-restore)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: false
+
+      - name: Cache NIC Go modules and build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: nic-go-${{ runner.os }}-${{ hashFiles('scripts/install-nic.sh') }}
+          restore-keys: |
+            nic-go-${{ runner.os }}-
+
+      - name: Setup Nebari Sandbox (normal flow)
+        uses: ./
+        with:
+          profile: platform
+          cluster-name: spike
+
+      - name: Snapshot the cluster (produces /tmp/spike-artifact/*)
+        run: bash scripts/snapshot-cluster.sh spike /tmp/spike-artifact
+
+      - name: Delete the source cluster so restore is on a clean slate
+        run: |
+          k3d cluster delete spike
+          docker network rm nebari-spike-net 2>/dev/null || true
+
+      - name: Restore from snapshot
+        run: bash scripts/restore-cluster.sh /tmp/spike-artifact spike
+
+      - name: Measure reconcile convergence
+        run: bash scripts/experiment-reconcile-timing.sh spike
+        env:
+          TIMEOUT_S: "300"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          k3d cluster delete spike 2>/dev/null || true
+          docker network rm nebari-spike-net 2>/dev/null || true
