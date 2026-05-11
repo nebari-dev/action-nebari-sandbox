@@ -46,10 +46,10 @@ jobs:
         uses: ./
         with:
           profile: platform
-          cluster-name: spike-source
+          cluster-name: spike
 
       - name: Snapshot the cluster
-        run: bash scripts/snapshot-cluster.sh spike-source /tmp/spike-artifact
+        run: bash scripts/snapshot-cluster.sh spike /tmp/spike-artifact
 
       - name: Upload snapshot bundle
         uses: actions/upload-artifact@v4
@@ -62,8 +62,8 @@ jobs:
       - name: Cleanup source cluster
         if: always()
         run: |
-          k3d cluster delete spike-source 2>/dev/null || true
-          docker network rm nebari-spike-source-net 2>/dev/null || true
+          k3d cluster delete spike 2>/dev/null || true
+          docker network rm nebari-spike-net 2>/dev/null || true
 
   restore:
     name: "Restore + verify"
@@ -86,7 +86,7 @@ jobs:
 
       - name: Restore cluster from snapshot
         id: restore
-        run: bash scripts/restore-cluster.sh /tmp/spike-artifact spike-restored
+        run: bash scripts/restore-cluster.sh /tmp/spike-artifact spike
 
       - name: Probe restored cluster for platform health
         run: |
@@ -117,5 +117,5 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          k3d cluster delete spike-restored 2>/dev/null || true
-          docker network rm nebari-spike-restored-net 2>/dev/null || true
+          k3d cluster delete spike 2>/dev/null || true
+          docker network rm nebari-spike-net 2>/dev/null || true
