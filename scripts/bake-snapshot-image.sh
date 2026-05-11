@@ -38,6 +38,11 @@ mkdir -p "${BUILD_DIR}/state"
 T=$(_t)
 docker run --rm --volumes-from "${SERVER}" -v "${BUILD_DIR}:/output" busybox \
   sh -c 'tar -C /var/lib/rancher/k3s -cf - . | tar -C /output/state -xf -' 2>/dev/null
+# k3s state has root-owned files (correct inside the cluster, but docker
+# build's context loader runs as the runner user and can't traverse them).
+# chown to the runner user; the `docker COPY` will still produce root-owned
+# files in the image layer, which is what k3s expects on restore.
+sudo chown -R "$(id -u):$(id -g)" "${BUILD_DIR}/state"
 echo "extract state: $(($(_t) - T))s"
 du -sh "${BUILD_DIR}/state"
 echo "::endgroup::"
