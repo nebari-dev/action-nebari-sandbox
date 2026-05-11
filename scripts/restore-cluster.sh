@@ -95,15 +95,17 @@ docker start "${SERVER}"
 echo "container started in $(($(_t) - T))s"
 echo "::endgroup::"
 
-echo "::group::Poll for k3s readiness (with periodic log dumps)"
-# Merge kubeconfig once — k3d wrote it during initial cluster create.
-k3d kubeconfig merge "${CLUSTER}" --kubeconfig-merge-default >/dev/null 2>&1 || true
-
+echo "::group::Poll for k3s readiness (using in-container kubectl)"
+# Use kubectl from inside the server container, which reads /etc/rancher/k3s/k3s.yaml.
+# Bypasses the host-side kubeconfig that k3d wrote with the FRESH cluster's CA
+# (now stale because the wipe+restore replaced the server CA with the snapshot's).
+KC="kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml"
 POLL_START=$(_t)
 READY=0
 for i in $(seq 1 60); do
-  if kubectl get --raw='/readyz' >/dev/null 2>&1 && \
-     kubectl get nodes --no-headers 2>/dev/null | awk '{print $2}' | grep -q '^Ready$'; then
+  if docker exec "${SERVER}" sh -c "${KC} get --raw=/readyz" >/dev/null 2>&1 && \
+     docker exec "${SERVER}" sh -c "${KC} get nodes --no-headers" 2>/dev/null \
+       | awk '{print $2}' | grep -q '^Ready$'; then
     READY=1
     echo "k3s Ready after $(($(_t) - POLL_START))s"
     break
@@ -112,8 +114,6 @@ for i in $(seq 1 60); do
   if (( i % 6 == 0 )); then
     echo "  --- recent container logs ---"
     docker logs --tail 30 "${SERVER}" 2>&1 | sed 's/^/  /'
-    echo "  --- /var/lib/rancher/k3s top-level ---"
-    docker exec "${SERVER}" ls -la /var/lib/rancher/k3s/ 2>&1 | sed 's/^/  /' || true
   fi
   sleep 10
 done
@@ -125,14 +125,19 @@ if (( READY == 0 )); then
 fi
 echo "::endgroup::"
 
-echo "::group::Cluster state immediately after restore"
-kubectl get nodes
+echo "::group::Cluster state immediately after restore (via in-container kubectl)"
+# Stale host kubeconfig: bypass it and run against the in-container k3s.yaml.
+docker exec "${SERVER}" ${KC} get nodes -o wide
 echo
 echo "--- pods (all namespaces) ---"
-kubectl get pods -A
+docker exec "${SERVER}" ${KC} get pods -A
 echo
 echo "--- argocd applications ---"
-kubectl get applications -n argocd 2>/dev/null || echo "(no Applications visible)"
+docker exec "${SERVER}" ${KC} get applications -n argocd 2>/dev/null \
+  || echo "(no Applications visible)"
+echo
+echo "--- namespaces ---"
+docker exec "${SERVER}" ${KC} get namespaces
 echo "::endgroup::"
 
 TOTAL=$(($(_t) - RESTORE_START))
