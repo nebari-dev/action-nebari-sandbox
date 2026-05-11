@@ -31,7 +31,7 @@ T=$(_t); k3d cluster stop "${CLUSTER_NAME}"; echo "stop: $(($(_t) - T))s"
 echo "::endgroup::"
 
 echo "::group::Prepare build context"
-rm -rf "${BUILD_DIR}"
+sudo rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}/state"
 
 # Extract the k3s state tree out of the server's anonymous docker volume.
@@ -96,4 +96,6 @@ echo "::group::Restart source cluster (snapshot baked, source keeps running)"
 k3d cluster start "${CLUSTER_NAME}"
 echo "::endgroup::"
 
-rm -rf "${BUILD_DIR}"
+# Build context contains root-owned files from the snapshot tree, so the
+# cleanup needs sudo (we deliberately didn't chown for UID preservation).
+sudo rm -rf "${BUILD_DIR}"
