@@ -47,12 +47,18 @@ inputs:
       and profiling CI runs; has no effect on normal operation when 'false'.
     required: false
     default: "false"
-  # nic-version:
-  #   description: "NIC version — release tag (e.g. v0.1.0) or branch name"
-  #   required: false
-  #   default: "latest"
-  #   NOTE: Disabled until NIC cuts a release with file:// git support (PR #136).
-  #   The platform profile currently builds from the local_git branch.
+  nic-version:
+    description: >
+      NIC version to install (platform profile only).
+      - 'latest' (default): downloads the latest released pre-built binary.
+      - 'vX.Y.Z': downloads a specific release's pre-built binary.
+      - '.': builds from $GITHUB_WORKSPACE (use when the consumer has the
+        NIC repo checked out, e.g. NIC's own self-tests).
+      - Any other string (branch name, tag, commit sha): clones that ref
+        and builds from source. Requires Go in the consumer's workflow
+        (add actions/setup-go before this action).
+    required: false
+    default: "latest"
 
 outputs:
   kubeconfig:
@@ -99,6 +105,12 @@ runs:
       if: inputs.profile == 'platform'
       shell: bash
       run: ${{ github.action_path }}/scripts/install-nic.sh
+      env:
+        NIC_VERSION: ${{ inputs.nic-version }}
+        # Used by install-nic.sh for authenticated GitHub API calls (release
+        # metadata + checksums.txt). Avoids the 60/hr unauthenticated rate
+        # limit, which can bite on self-hosted runners sharing an egress IP.
+        GITHUB_TOKEN: ${{ github.token }}
 
     - name: Deploy platform
       if: inputs.profile == 'platform'

@@ -47,36 +47,11 @@ jobs:
         run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
 
   test-platform:
-    name: "Test platform profile"
+    name: "Test platform profile (pre-built NIC binary)"
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          # NIC's go.mod tracks the latest stable Go release.
-          # setup-go@v6 sets GOTOOLCHAIN=local by default, so the installed
-          # version must already satisfy the go.mod directive.
-          go-version: "1.25"
-          cache: false
-
-      - name: Cache NIC Go modules and build
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          # install-nic.sh pins NIC_REPO and NIC_BRANCH; hashing it means the
-          # cache only busts when the build target actually changes, not on
-          # unrelated workflow edits. Trade-off: we miss cache invalidation
-          # when NIC_BRANCH receives new commits (no go.sum to hash since
-          # NIC is cloned fresh into /tmp). Acceptable — Go's incremental
-          # build handles modest churn cheaply.
-          key: nic-go-${{ runner.os }}-${{ hashFiles('scripts/install-nic.sh') }}
-          restore-keys: |
-            nic-go-${{ runner.os }}-
 
       - name: Setup Nebari Sandbox
         id: sandbox
@@ -112,3 +87,4 @@ jobs:
           if [[ -n "${{ steps.sandbox.outputs.network-name }}" ]]; then
             docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
           fi
+

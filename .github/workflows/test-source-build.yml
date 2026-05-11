@@ -1,0 +1,69 @@
+name: Test NIC source-build path
+
+# The default consumer path is `nic-version: latest` (pre-built binary,
+# covered by test-action.yml). This workflow exists only to keep the
+# source-build branch of install-nic.sh from bit-rotting. It runs:
+#
+#   - weekly, against NIC's main branch (drift detection)
+#   - on workflow_dispatch (manual exploration)
+#   - on PRs that touch install-nic.sh or this workflow file
+#
+# Deliberately NOT triggered on every PR — full platform bootstrap with
+# a Go build is ~4-5 min and not worth paying per-commit when the surface
+# being protected is small.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"  # Mondays 07:00 UTC
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/install-nic.sh'
+      - '.github/workflows/test-source-build.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-build:
+    name: "Platform profile, nic-version=main (source build)"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: false
+
+      - name: Cache NIC Go modules and build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: nic-go-${{ runner.os }}-${{ hashFiles('scripts/install-nic.sh') }}
+          restore-keys: |
+            nic-go-${{ runner.os }}-
+
+      - name: Setup Nebari Sandbox (nic-version=main)
+        id: sandbox
+        uses: ./
+        with:
+          profile: platform
+          cluster-name: nebari-source-build-test
+          nic-version: "main"
+
+      - name: Smoke check
+        run: kubectl get applications -n argocd
+
+      - name: Cleanup
+        if: always()
+        run: |
+          k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }} 2>/dev/null || true
+          if [[ -n "${{ steps.sandbox.outputs.network-name }}" ]]; then
+            docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
+          fi
