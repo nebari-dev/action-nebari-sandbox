@@ -56,6 +56,10 @@ docker run --rm --volumes-from "${SERVER}" -v "${BUILD_DIR}:/output" busybox \
 # at the image's permissions — what k3s expects on restore.
 sudo chown -R "$(id -u):$(id -g)" "${BUILD_DIR}/state"
 sudo chmod -R u+rwX "${BUILD_DIR}/state"
+# Strip device files: containerd snapshots include /dev/null etc inside the
+# image rootfs, and docker build's COPY can't recreate device nodes without
+# privileged mode. k3s recreates these on container startup anyway.
+sudo find "${BUILD_DIR}/state" \( -type c -o -type b -o -type s -o -type p \) -delete 2>/dev/null || true
 echo "extract state: $(($(_t) - T))s"
 du -sh "${BUILD_DIR}/state" 2>/dev/null || true
 echo "::endgroup::"
