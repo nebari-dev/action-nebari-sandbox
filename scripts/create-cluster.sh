@@ -26,6 +26,14 @@ K3D_ARGS=(
   --timeout 120s
 )
 
+# K3S_TOKEN is set by restore-cluster.sh when bringing up a cluster that will
+# have its volume replaced from a snapshot — k3s decrypts the snapshot's
+# bootstrap data with this token, so the fresh provision must use the same
+# value. Unset for normal create flows.
+if [[ -n "${K3S_TOKEN:-}" ]]; then
+  K3D_ARGS+=(--token "${K3S_TOKEN}")
+fi
+
 # Source of truth for derived names (also exported as action outputs below).
 NETWORK_NAME="nebari-${CLUSTER_NAME}-net"
 GITOPS_DIR="/tmp/nebari-gitops-${CLUSTER_NAME}"

@@ -59,20 +59,40 @@ inputs:
         (add actions/setup-go before this action).
     required: false
     default: "latest"
+  snapshot-mode:
+    description: >
+      Platform profile only. Controls cluster snapshot/restore.
+      - 'off' (default): normal flow. Creates a fresh cluster, runs NIC
+        install + deploy, waits for the platform to come up.
+      - 'use': skips nic deploy. Restores a pre-baked cluster snapshot
+        bundle from `snapshot-path` instead. The bundle must have been
+        produced by a previous run with `snapshot-mode: create`.
+      - 'create': runs the normal flow, then snapshots the resulting
+        cluster into `snapshot-path` for later reuse. Intended for
+        release pipelines that publish reusable snapshots.
+    required: false
+    default: "off"
+  snapshot-path:
+    description: >
+      Filesystem path used by `snapshot-mode`. When `create`, the bundle
+      is written here. When `use`, the bundle is read from here. Ignored
+      when `snapshot-mode: off`. Path is created if missing.
+    required: false
+    default: "/tmp/nebari-snapshot"
 
 outputs:
   kubeconfig:
     description: "Path to the kubeconfig file for the created cluster"
-    value: ${{ steps.create-cluster.outputs.kubeconfig }}
+    value: ${{ steps.create-cluster.outputs.kubeconfig || steps.restore-cluster.outputs.kubeconfig }}
   cluster-name:
     description: "Name of the created k3d cluster"
-    value: ${{ steps.create-cluster.outputs.cluster-name }}
+    value: ${{ steps.create-cluster.outputs.cluster-name || steps.restore-cluster.outputs.cluster-name }}
   network-name:
     description: "Docker network created for the cluster (platform profile only). Use this in cleanup steps."
-    value: ${{ steps.create-cluster.outputs.network-name }}
+    value: ${{ steps.create-cluster.outputs.network-name || steps.restore-cluster.outputs.network-name }}
   gitops-dir:
     description: "Local GitOps directory mounted into the cluster (platform profile only)"
-    value: ${{ steps.create-cluster.outputs.gitops-dir }}
+    value: ${{ steps.create-cluster.outputs.gitops-dir || steps.restore-cluster.outputs.gitops-dir }}
   keycloak-admin-password:
     description: "Keycloak admin password (platform profile only)"
     value: ${{ steps.extract-outputs.outputs.keycloak-admin-password }}
@@ -94,6 +114,7 @@ runs:
 
     - name: Create k3d cluster
       id: create-cluster
+      if: inputs.snapshot-mode != 'use'
       shell: bash
       run: ${{ github.action_path }}/scripts/create-cluster.sh
       env:
@@ -101,7 +122,21 @@ runs:
         K8S_VERSION: ${{ inputs.k8s-version }}
         PROFILE: ${{ inputs.profile }}
 
+    - name: Restore k3d cluster from snapshot
+      id: restore-cluster
+      if: inputs.profile == 'platform' && inputs.snapshot-mode == 'use'
+      shell: bash
+      run: ${{ github.action_path }}/scripts/restore-cluster.sh
+      env:
+        CLUSTER_NAME: ${{ inputs.cluster-name }}
+        K8S_VERSION: ${{ inputs.k8s-version }}
+        PROFILE: ${{ inputs.profile }}
+        SNAPSHOT_PATH: ${{ inputs.snapshot-path }}
+
     - name: Install NIC
+      # NIC's binary is useful for consumers regardless of how the cluster
+      # came up (they may want the CLI for inspection). Install always when
+      # platform profile is in use, even for snapshot restores.
       if: inputs.profile == 'platform'
       shell: bash
       run: ${{ github.action_path }}/scripts/install-nic.sh
@@ -113,12 +148,15 @@ runs:
         GITHUB_TOKEN: ${{ github.token }}
 
     - name: Deploy platform
-      if: inputs.profile == 'platform'
+      # Skipped when using a snapshot — the snapshotted cluster already has
+      # the platform applied. Running nic deploy again would just re-write
+      # manifests ArgoCD is already managing.
+      if: inputs.profile == 'platform' && inputs.snapshot-mode != 'use'
       shell: bash
       run: ${{ github.action_path }}/scripts/deploy-platform.sh
       env:
         CLUSTER_NAME: ${{ inputs.cluster-name }}
-        GITOPS_DIR: ${{ steps.create-cluster.outputs.gitops-dir }}
+        GITOPS_DIR: ${{ steps.create-cluster.outputs.gitops-dir || steps.restore-cluster.outputs.gitops-dir }}
         NEBARI_TIMING_REPORT: ${{ inputs.timing-report }}
 
     - name: Extract platform outputs
@@ -157,3 +195,14 @@ runs:
       run: python3 ${{ github.action_path }}/scripts/timing-report.py
       env:
         CLUSTER_NAME: ${{ inputs.cluster-name }}
+
+    - name: Snapshot platform cluster
+      # Captures the post-deploy cluster state into `snapshot-path` so a later
+      # run can restore it via `snapshot-mode: use`. Intended for release
+      # pipelines that publish reusable snapshots.
+      if: inputs.profile == 'platform' && inputs.snapshot-mode == 'create'
+      shell: bash
+      run: ${{ github.action_path }}/scripts/snapshot-cluster.sh
+      env:
+        CLUSTER_NAME: ${{ inputs.cluster-name }}
+        SNAPSHOT_PATH: ${{ inputs.snapshot-path }}

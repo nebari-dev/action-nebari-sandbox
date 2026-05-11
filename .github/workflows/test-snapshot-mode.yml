@@ -1,0 +1,110 @@
+name: Test snapshot-mode (issue #33)
+
+# Two-job pipeline that validates the snapshot-mode integration end-to-end:
+#
+#   1. create: runs the action with snapshot-mode=create. Bootstraps normally,
+#      then writes a bundle to /tmp/nebari-snapshot. Uploads as a workflow
+#      artifact so the next job (different runner) can consume it.
+#   2. use:    downloads the artifact, runs the action with snapshot-mode=use
+#      pointing at the bundle path. Confirms the restored cluster has the
+#      platform applied (kubectl get applications) and that consumer kubectl
+#      works without TLS errors (kubeconfig refresh in restore-cluster.sh).
+#
+# Triggered manually or on PRs that touch the snapshot/restore scripts or
+# the action.yml inputs related to snapshots.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/snapshot-cluster.sh'
+      - 'scripts/restore-cluster.sh'
+      - 'scripts/create-cluster.sh'
+      - 'action.yml'
+      - '.github/workflows/test-snapshot-mode.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  create:
+    name: "snapshot-mode=create (bootstrap + snapshot)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Nebari Sandbox (snapshot-mode=create)
+        id: sandbox
+        uses: ./
+        with:
+          profile: platform
+          cluster-name: snapshot-source
+          snapshot-mode: "create"
+          snapshot-path: "/tmp/nebari-snapshot"
+
+      - name: Confirm snapshot bundle exists
+        run: |
+          ls -lh /tmp/nebari-snapshot/
+          cat /tmp/nebari-snapshot/metadata.txt
+
+      - name: Upload snapshot bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nebari-snapshot
+          path: /tmp/nebari-snapshot/
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Cleanup source cluster
+        if: always()
+        run: |
+          k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }} 2>/dev/null || true
+          if [[ -n "${{ steps.sandbox.outputs.network-name }}" ]]; then
+            docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
+          fi
+
+  use:
+    name: "snapshot-mode=use (restore + verify)"
+    needs: create
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download snapshot bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: nebari-snapshot
+          path: /tmp/nebari-snapshot/
+
+      - name: Setup Nebari Sandbox (snapshot-mode=use)
+        id: sandbox
+        uses: ./
+        with:
+          profile: platform
+          cluster-name: snapshot-source
+          snapshot-mode: "use"
+          snapshot-path: "/tmp/nebari-snapshot"
+
+      - name: Verify platform is present (consumer-side kubectl)
+        env:
+          KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+        run: |
+          echo "=== nodes ==="
+          kubectl get nodes
+          echo
+          echo "=== platform Applications ==="
+          kubectl get applications -n argocd
+          echo
+          echo "=== pods (foundational namespaces) ==="
+          kubectl get pods -n cert-manager -n keycloak -n argocd
+
+      - name: Cleanup restored cluster
+        if: always()
+        run: |
+          k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }} 2>/dev/null || true
+          if [[ -n "${{ steps.sandbox.outputs.network-name }}" ]]; then
+            docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
+          fi
