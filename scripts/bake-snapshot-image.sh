@@ -35,16 +35,29 @@ rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}/state"
 
 # Extract the k3s state tree out of the server's anonymous docker volume.
+# Excludes:
+#   - overlayfs `work` dirs: mode 000 by design, no useful content, overlayfs
+#     recreates them on mount.
+#   - containerd runtime task state: ephemeral, contains live task handles.
+#   - tmpmounts: temporary mount points, recreated on demand.
 T=$(_t)
 docker run --rm --volumes-from "${SERVER}" -v "${BUILD_DIR}:/output" busybox \
-  sh -c 'tar -C /var/lib/rancher/k3s -cf - . | tar -C /output/state -xf -' 2>/dev/null
-# k3s state has root-owned files (correct inside the cluster, but docker
-# build's context loader runs as the runner user and can't traverse them).
-# chown to the runner user; the `docker COPY` will still produce root-owned
-# files in the image layer, which is what k3s expects on restore.
+  sh -c '
+    tar -C /var/lib/rancher/k3s \
+        --exclude="agent/containerd/io.containerd.snapshotter.*/snapshots/*/work" \
+        --exclude="agent/containerd/io.containerd.runtime.*" \
+        --exclude="agent/containerd/tmpmounts" \
+        -cf - . \
+      | tar -C /output/state -xf -
+  ' 2>/dev/null
+# k3s state has root-owned files with restrictive perms. chown+chmod so
+# docker build's context loader (running as the runner user) can read it.
+# The `docker COPY` will still produce root-owned files in the image layer
+# at the image's permissions — what k3s expects on restore.
 sudo chown -R "$(id -u):$(id -g)" "${BUILD_DIR}/state"
+sudo chmod -R u+rwX "${BUILD_DIR}/state"
 echo "extract state: $(($(_t) - T))s"
-du -sh "${BUILD_DIR}/state"
+du -sh "${BUILD_DIR}/state" 2>/dev/null || true
 echo "::endgroup::"
 
 echo "::group::Capture bootstrap token"
