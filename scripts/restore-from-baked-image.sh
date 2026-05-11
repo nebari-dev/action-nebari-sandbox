@@ -63,10 +63,20 @@ k3d kubeconfig merge "${CLUSTER_NAME}" --kubeconfig-merge-default
 kubectl get nodes
 echo
 echo "--- pods (first 20) ---"
-kubectl get pods -A | head -20
+# Use awk for line-cap instead of `| head -20` to avoid SIGPIPE under pipefail.
+kubectl get pods -A 2>&1 | awk 'NR <= 20'
 echo
 echo "--- argocd Applications ---"
 kubectl get applications -n argocd 2>/dev/null || echo "(no Applications visible)"
+echo "::endgroup::"
+
+echo "::group::Wait for pods to become Ready (so we can measure full restore cost)"
+T=$(_t)
+kubectl wait --for=condition=Ready pods --all -A --timeout=180s 2>&1 | tail -3 || true
+echo "pod ready wait: $(($(_t) - T))s"
+echo
+echo "--- pod state after wait ---"
+kubectl get pods -A 2>&1 | awk 'NR <= 30'
 echo "::endgroup::"
 
 TOTAL=$(($(_t) - RESTORE_START))
