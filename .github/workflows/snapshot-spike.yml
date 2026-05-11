@@ -90,17 +90,24 @@ jobs:
 
       - name: Probe restored cluster for platform health
         run: |
+          # Use in-container kubectl: the host kubeconfig was written by k3d
+          # cluster create with the FRESH cluster's CA, which is now stale
+          # because the wipe+restore replaced the server CA with the snapshot's.
+          # In-container k3s.yaml always reflects the live CA.
+          KC="kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml"
+          SERVER=k3d-spike-server-0
+
           echo "::group::Wait briefly for pods to settle"
-          # Don't fail hard yet — we want to see partial recovery if it's not perfect.
-          kubectl wait --for=condition=Ready pods --all -A --timeout=120s || true
+          docker exec "$SERVER" $KC wait --for=condition=Ready pods --all -A --timeout=120s || true
           echo "::endgroup::"
 
           echo "::group::Final pod state"
-          kubectl get pods -A
+          docker exec "$SERVER" $KC get pods -A
           echo "::endgroup::"
 
           echo "::group::ArgoCD Application sync state"
-          kubectl get applications -n argocd -o wide 2>/dev/null || echo "(no Applications visible)"
+          docker exec "$SERVER" $KC get applications -n argocd -o wide 2>/dev/null \
+            || echo "(no Applications visible)"
           echo "::endgroup::"
 
       - name: Restore timing summary
