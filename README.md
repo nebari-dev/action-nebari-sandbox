@@ -63,10 +63,6 @@ Deploy the full Nebari foundational stack for integration testing:
 steps:
   - uses: actions/checkout@v6
 
-  - uses: actions/setup-go@v6
-    with:
-      go-version: "1.25"
-
   - uses: nebari-dev/action-nebari-sandbox@v1
     id: sandbox
     with:
@@ -91,9 +87,10 @@ steps:
       docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
 ```
 
-> **Note:** The `platform` profile requires Go to build NIC from source. It currently
-> pins to the [`local_git`](https://github.com/nebari-dev/nebari-infrastructure-core/pull/136)
-> branch of NIC, which adds `file://` git support for local ArgoCD deployments.
+> **Note:** by default the `platform` profile downloads NIC's latest pre-built
+> binary. Pass `nic-version: <branch>` (or `'.'` to use `$GITHUB_WORKSPACE`)
+> if you want to build NIC from source — that path needs `actions/setup-go`
+> in your workflow before this action.
 
 <!--
   Inputs and Outputs sections below are auto-generated from action.yml by
@@ -117,6 +114,7 @@ steps:
 | `resource-summary` | <p>When 'true' (and profile is 'platform'), append a markdown table of pod resource requests/limits and node allocatable capacity to $GITHUB<em>STEP</em>SUMMARY after the platform stack is up. Useful for tracking minimum-spec requirements as the foundational stack evolves.</p> | `false` | `false` |
 | `argocd-self-heal` | <p>Platform profile only. Controls ArgoCD's automated selfHeal on the foundational Application set. Defaults to 'true' to match NIC's production behavior. Set to 'false' for ephemeral CI clusters where tests need to mutate platform state (e.g. 'kubectl set image' to swap in a dev build) without ArgoCD reverting the change on its next reconcile cycle. Has no effect when profile is 'cluster-only'.</p> | `false` | `true` |
 | `timing-report` | <p>When 'true', record wall-clock durations for key phases (k3s image pull, k3d cluster create, nic deploy, etc.) and append a markdown timing table to $GITHUB<em>STEP</em>SUMMARY. Works with both profiles. Intended for benchmarking and profiling CI runs; has no effect on normal operation when 'false'.</p> | `false` | `false` |
+| `nic-version` | <p>NIC version to install (platform profile only). - 'latest' (default): downloads the latest released pre-built binary. - 'vX.Y.Z': downloads a specific release's pre-built binary. - '.': builds from $GITHUB_WORKSPACE (use when the consumer has the   NIC repo checked out, e.g. NIC's own self-tests).</p> <ul> <li>Any other string (branch name, tag, commit sha): clones that ref and builds from source. Requires Go in the consumer's workflow (add actions/setup-go before this action).</li> </ul> | `false` | `latest` |
 <!-- action-docs-inputs action="action.yml" -->
 
 <!-- action-docs-outputs action="action.yml" -->
@@ -154,7 +152,7 @@ The action does not automatically delete the cluster. Add a cleanup step to your
 ## Requirements
 
 - **Both profiles:** `ubuntu-24.04` (or `ubuntu-latest`) runner with Docker (pre-installed on GitHub-hosted runners)
-- **`platform` profile:** Go 1.25+ (use `actions/setup-go@v6`) — NIC is built from source until a release with `file://` git support is available
+- **`platform` profile:** none extra by default (NIC's pre-built binary is downloaded). Go 1.25+ via `actions/setup-go@v6` is only needed if you set `nic-version` to a non-release ref (branch, sha, or `.`) and want to build from source.
 
 ## License
 
