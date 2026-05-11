@@ -1,0 +1,73 @@
+name: Spike — baked image snapshot (issue #33 follow-up)
+
+# Tests option B: bake the cluster snapshot into a custom rancher/k3s image,
+# then bring the cluster up via `k3d cluster create --image=<custom>` and let
+# k3d's anonymous volume auto-populate from the image's content. Goal is to
+# measure whether this avoids the ~40s create-then-wipe overhead that made
+# the tarball-bundle integration (PR #37) a break-even.
+#
+# Single-runner test (no upload-artifact round-trip) so we isolate the
+# restore-flow cost from the transport cost. If this is meaningfully faster
+# than the default flow, the next step is to validate GHCR pull as the
+# transport.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/bake-snapshot-image.sh'
+      - 'scripts/restore-from-baked-image.sh'
+      - '.github/workflows/spike-baked-image.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bake-and-restore:
+    name: "Bootstrap → bake image → tear down → restore via k3d --image"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Nebari Sandbox (normal flow)
+        id: sandbox
+        uses: ./
+        with:
+          profile: platform
+          cluster-name: spike
+
+      - name: Snapshot gitops dir (still a hostPath, lives outside the image)
+        run: |
+          tar -C /tmp -cf - nebari-gitops-spike | zstd -T0 --long=27 -o /tmp/gitops.tar.zst
+          ls -lh /tmp/gitops.tar.zst
+
+      - name: Bake snapshot into custom k3s image
+        run: bash scripts/bake-snapshot-image.sh
+        env:
+          CLUSTER_NAME: spike
+          IMAGE_TAG: "nebari-snapshot:spike"
+          K8S_VERSION: "1.32.4"
+          OUTPUT_TOKEN_FILE: "/tmp/k3s-token"
+
+      - name: Tear down source cluster + network
+        run: |
+          k3d cluster delete spike
+          docker network rm nebari-spike-net 2>/dev/null || true
+
+      - name: Restore from baked image
+        id: restore
+        run: bash scripts/restore-from-baked-image.sh
+        env:
+          CLUSTER_NAME: spike
+          IMAGE_TAG: "nebari-snapshot:spike"
+          TOKEN_FILE: "/tmp/k3s-token"
+          GITOPS_BUNDLE: "/tmp/gitops.tar.zst"
+          K8S_VERSION: "1.32.4"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          k3d cluster delete spike 2>/dev/null || true
+          docker network rm nebari-spike-net 2>/dev/null || true
