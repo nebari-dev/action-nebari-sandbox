@@ -77,16 +77,44 @@ zstd -d "${BUNDLE_DIR}/k3s-state.tar.zst" -c \
 echo "wipe+restore: $(($(_t) - T))s"
 echo "::endgroup::"
 
-echo "::group::Start cluster with restored state"
-T=$(_t); k3d cluster start "${CLUSTER}"; echo "start: $(($(_t) - T))s"
+echo "::group::Start container directly (bypass k3d's blocking wait)"
+T=$(_t)
+# `k3d cluster start` hangs indefinitely if k3s can't come up with the
+# restored state. Bypass that by starting the docker container directly
+# and polling for k3s readiness ourselves, surfacing k3s logs along the way
+# so we can see WHY it isn't coming up if it fails.
+docker start "${SERVER}"
+echo "container started in $(($(_t) - T))s"
 echo "::endgroup::"
 
-echo "::group::Merge kubeconfig"
-k3d kubeconfig merge "${CLUSTER}" --kubeconfig-merge-default
-echo "::endgroup::"
+echo "::group::Poll for k3s readiness (with periodic log dumps)"
+# Merge kubeconfig once — k3d wrote it during initial cluster create.
+k3d kubeconfig merge "${CLUSTER}" --kubeconfig-merge-default >/dev/null 2>&1 || true
 
-echo "::group::Wait for node Ready (briefly)"
-kubectl wait --for=condition=Ready nodes --all --timeout=60s || echo "(node not Ready yet)"
+POLL_START=$(_t)
+READY=0
+for i in $(seq 1 60); do
+  if kubectl get --raw='/readyz' >/dev/null 2>&1 && \
+     kubectl get nodes --no-headers 2>/dev/null | awk '{print $2}' | grep -q '^Ready$'; then
+    READY=1
+    echo "k3s Ready after $(($(_t) - POLL_START))s"
+    break
+  fi
+  printf '  poll %d (%ds elapsed)\n' "$i" "$(($(_t) - POLL_START))"
+  if (( i % 6 == 0 )); then
+    echo "  --- recent container logs ---"
+    docker logs --tail 30 "${SERVER}" 2>&1 | sed 's/^/  /'
+    echo "  --- /var/lib/rancher/k3s top-level ---"
+    docker exec "${SERVER}" ls -la /var/lib/rancher/k3s/ 2>&1 | sed 's/^/  /' || true
+  fi
+  sleep 10
+done
+
+if (( READY == 0 )); then
+  echo "::error::k3s did not become Ready within the poll window"
+  echo "--- final container logs ---"
+  docker logs --tail 200 "${SERVER}" 2>&1
+fi
 echo "::endgroup::"
 
 echo "::group::Cluster state immediately after restore"
