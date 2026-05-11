@@ -73,22 +73,21 @@ echo "token captured: ${TOKEN_BYTES} bytes -> ${OUTPUT_TOKEN_FILE}"
 [ "${TOKEN_BYTES}" -gt 0 ] || { echo "::error::empty token"; exit 1; }
 echo "::endgroup::"
 
-echo "::group::Write Dockerfile"
-cat > "${BUILD_DIR}/Dockerfile" <<DOCKERFILE
-# Bake a platform-profile snapshot into the rancher/k3s base layer. When k3d
-# creates its anonymous volume on first cluster start, the volume is
-# auto-populated from this layer's /var/lib/rancher/k3s tree. k3s then sees
-# the pre-existing state and resumes without rerunning nic deploy.
-FROM rancher/k3s:v${K8S_VERSION}-k3s1
-COPY state /var/lib/rancher/k3s
-DOCKERFILE
-cat "${BUILD_DIR}/Dockerfile"
-echo "::endgroup::"
-
-echo "::group::docker build snapshot image (as root so per-file UIDs survive)"
+echo "::group::Bake image via docker create + cp + commit"
+# We do NOT use `docker build` / BuildKit. BuildKit's COPY resets file
+# ownership to root:root regardless of source UIDs, which destroys the
+# postgres (UID 999) and other workload-specific ownership inside the
+# snapshot tree. The create+cp+commit path uses tar streams under the hood
+# which preserve UID/GID metadata.
 T=$(_t)
-sudo docker build -t "${IMAGE_TAG}" "${BUILD_DIR}" >/dev/null
-echo "docker build: $(($(_t) - T))s"
+TMP_CTR=$(sudo docker create "rancher/k3s:v${K8S_VERSION}-k3s1" noop-server 2>/dev/null)
+echo "tmp container: ${TMP_CTR}"
+# docker cp follows the well-known "trailing-/." convention to copy directory
+# contents (not the directory itself) into the destination.
+sudo docker cp "${BUILD_DIR}/state/." "${TMP_CTR}:/var/lib/rancher/k3s/"
+sudo docker commit "${TMP_CTR}" "${IMAGE_TAG}" >/dev/null
+sudo docker rm "${TMP_CTR}" >/dev/null
+echo "bake (create+cp+commit): $(($(_t) - T))s"
 docker image ls "${IMAGE_TAG}"
 echo "::endgroup::"
 
