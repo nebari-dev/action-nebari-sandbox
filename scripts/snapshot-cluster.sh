@@ -39,6 +39,19 @@ echo "snapshot k3s state: $(($(_t) - T))s"
 ls -lh "${OUTPUT_DIR}/k3s-state.tar.zst"
 echo "::endgroup::"
 
+echo "::group::Capture k3s bootstrap token"
+# k3s encrypts cluster bootstrap data (CA, certs, etcd/sqlite keys) with a
+# token at /var/lib/rancher/k3s/server/token. On restore we have to use the
+# SAME token for the fresh cluster init, otherwise the restored encrypted
+# data can't be decrypted by the new server and k3s fatals on startup with
+# "bootstrap data already found and encrypted with different token".
+docker run --rm --volumes-from "${SERVER}" busybox \
+  cat /var/lib/rancher/k3s/server/token 2>/dev/null > "${OUTPUT_DIR}/k3s-token"
+TOKEN_BYTES=$(wc -c < "${OUTPUT_DIR}/k3s-token" || echo 0)
+echo "token captured: ${TOKEN_BYTES} bytes"
+[ "${TOKEN_BYTES}" -gt 0 ] || { echo "::error::empty token"; exit 1; }
+echo "::endgroup::"
+
 echo "::group::Snapshot GitOps repo (hostPath bind, separate from volume)"
 T=$(_t)
 tar -C "$(dirname "${GITOPS_DIR}")" -cf - "$(basename "${GITOPS_DIR}")" \

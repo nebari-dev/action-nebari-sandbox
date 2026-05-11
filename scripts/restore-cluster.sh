@@ -23,6 +23,13 @@ K8S_IMAGE="rancher/k3s:v1.32.4-k3s1"
 [ -d "${BUNDLE_DIR}" ] || { echo "Bundle dir not found: ${BUNDLE_DIR}"; exit 1; }
 [ -f "${BUNDLE_DIR}/k3s-state.tar.zst" ] || { echo "Missing k3s-state.tar.zst"; exit 1; }
 [ -f "${BUNDLE_DIR}/gitops.tar.zst" ] || { echo "Missing gitops.tar.zst"; exit 1; }
+[ -f "${BUNDLE_DIR}/k3s-token" ] || { echo "Missing k3s-token"; exit 1; }
+
+# The fresh cluster must be initialized with the SAME bootstrap token that
+# was used by the original cluster; otherwise the restored encrypted data
+# can't be decrypted and k3s fatals on startup.
+K3S_TOKEN_VALUE="$(tr -d '\n' < "${BUNDLE_DIR}/k3s-token")"
+[ -n "${K3S_TOKEN_VALUE}" ] || { echo "Empty k3s token"; exit 1; }
 
 _t() { date +%s; }
 RESTORE_START=$(_t)
@@ -52,6 +59,7 @@ echo "::group::Provision fresh k3d cluster (will overwrite state next)"
 T=$(_t)
 k3d cluster create "${CLUSTER}" \
   --image "${K8S_IMAGE}" \
+  --token "${K3S_TOKEN_VALUE}" \
   --no-lb \
   --k3s-arg "--disable=traefik@server:0" \
   --k3s-arg "--disable=servicelb@server:0" \
