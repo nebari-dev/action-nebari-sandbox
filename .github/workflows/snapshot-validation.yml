@@ -22,7 +22,7 @@ jobs:
   compression-sweep:
     name: "Compression sweep (crictl prune + zstd variants)"
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
 
@@ -106,6 +106,12 @@ jobs:
         run: bash scripts/experiment-reconcile-timing.sh spike
         env:
           TIMEOUT_S: "300"
+
+      - name: Investigate OutOfSync apps
+        # Run regardless of whether reconcile-timing converged or not — when
+        # it doesn't, this step is what tells us why.
+        if: always()
+        run: bash scripts/experiment-investigate-drift.sh spike
 
       - name: Cleanup
         if: always()

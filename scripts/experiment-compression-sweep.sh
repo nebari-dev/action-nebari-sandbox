@@ -55,10 +55,11 @@ run_variant() {
 
 sweep() {
   local stage="$1" raw_path="$2"
-  run_variant "${stage}" "baseline"        "zstd -T0"                "${raw_path}"
-  run_variant "${stage}" "long27"          "zstd -T0 --long=27"      "${raw_path}"
-  run_variant "${stage}" "level19"         "zstd -T0 -19"            "${raw_path}"
-  run_variant "${stage}" "long27-level19"  "zstd -T0 --long=27 -19"  "${raw_path}"
+  # Validation run 25668972215 measured `-19` at 730s compress for ~10% extra
+  # size reduction vs baseline's 13s. Trade-off not worth it: dropped from the
+  # sweep so stage 2 (post-prune) actually fits in the workflow timeout.
+  run_variant "${stage}" "baseline"  "zstd -T0"            "${raw_path}"
+  run_variant "${stage}" "long27"    "zstd -T0 --long=27"  "${raw_path}"
 }
 
 # ---------------------------------------------------------------------------
