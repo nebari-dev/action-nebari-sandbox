@@ -50,19 +50,20 @@ docker run --rm --volumes-from "${SERVER}" -v "${BUILD_DIR}:/output" busybox \
         -cf - . \
       | tar -C /output/state -xf -
   ' 2>/dev/null
-# k3s state has root-owned files with restrictive perms. chown+chmod so
-# docker build's context loader (running as the runner user) can read it.
-# The `docker COPY` will still produce root-owned files in the image layer
-# at the image's permissions — what k3s expects on restore.
-sudo chown -R "$(id -u):$(id -g)" "${BUILD_DIR}/state"
-sudo chmod -R u+rwX "${BUILD_DIR}/state"
 # Strip device files: containerd snapshots include /dev/null etc inside the
 # image rootfs, and docker build's COPY can't recreate device nodes without
-# privileged mode. k3s recreates these on container startup anyway.
+# privileged mode. k3s recreates these on container startup anyway. Also
+# strip sockets and fifos for the same reason.
 sudo find "${BUILD_DIR}/state" \( -type c -o -type b -o -type s -o -type p \) -delete 2>/dev/null || true
 echo "extract state: $(($(_t) - T))s"
-du -sh "${BUILD_DIR}/state" 2>/dev/null || true
+sudo du -sh "${BUILD_DIR}/state" 2>/dev/null || true
 echo "::endgroup::"
+
+# IMPORTANT: don't chown the build context to the runner user. The state
+# tree contains files owned by various UIDs (postgres=999, etc.) and those
+# original ownerships must be preserved into the image layer or postgres
+# refuses to start on restore. Use `sudo docker build` instead so the CLI
+# can read the root-owned context without changing ownership.
 
 echo "::group::Capture bootstrap token"
 docker run --rm --volumes-from "${SERVER}" busybox \
@@ -84,9 +85,9 @@ DOCKERFILE
 cat "${BUILD_DIR}/Dockerfile"
 echo "::endgroup::"
 
-echo "::group::docker build snapshot image"
+echo "::group::docker build snapshot image (as root so per-file UIDs survive)"
 T=$(_t)
-docker build -t "${IMAGE_TAG}" "${BUILD_DIR}" >/dev/null
+sudo docker build -t "${IMAGE_TAG}" "${BUILD_DIR}" >/dev/null
 echo "docker build: $(($(_t) - T))s"
 docker image ls "${IMAGE_TAG}"
 echo "::endgroup::"
