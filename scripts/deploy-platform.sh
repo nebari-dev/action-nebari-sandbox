@@ -3,7 +3,6 @@ set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:?CLUSTER_NAME is required}"
 GITOPS_DIR="${GITOPS_DIR:?GITOPS_DIR is required (set by create-cluster step)}"
-CONFIG_FILE="/tmp/nic-config-${CLUSTER_NAME}.yaml"
 
 # ── timing helpers ────────────────────────────────────────────────────────────
 _TIMING_FILE="/tmp/nebari-timing-${CLUSTER_NAME}.tsv"
@@ -13,9 +12,24 @@ _record_timing() {          # label start_ms end_ms
 }
 # ─────────────────────────────────────────────────────────────────────────────
 
-echo "::group::Generate NIC config"
-
-cat > "${CONFIG_FILE}" << EOF
+# If the consumer supplied a NIC config path, pass it straight through to
+# `nic deploy -f`. Otherwise generate the default at /tmp/nic-config-*.yaml.
+# Consumer-supplied configs are the consumer's responsibility — if they
+# override fields like `cluster.local.kube_context` or
+# `git_repository.url`, they must match what the action provisioned.
+if [[ -n "${NIC_CONFIG:-}" ]]; then
+  if [[ ! -f "${NIC_CONFIG}" ]]; then
+    echo "::error::nic-config points to non-existent file: ${NIC_CONFIG}" >&2
+    exit 1
+  fi
+  CONFIG_FILE="${NIC_CONFIG}"
+  echo "::group::Using consumer-supplied NIC config: ${CONFIG_FILE}"
+  cat "${CONFIG_FILE}"
+  echo "::endgroup::"
+else
+  CONFIG_FILE="/tmp/nic-config-${CLUSTER_NAME}.yaml"
+  echo "::group::Generate NIC config"
+  cat > "${CONFIG_FILE}" << EOF
 project_name: ${CLUSTER_NAME}
 domain: nebari.local
 certificate:
@@ -37,11 +51,10 @@ cluster:
       worker:
         kubernetes.io/os: linux
 EOF
-
-echo "Config written to ${CONFIG_FILE}:"
-cat "${CONFIG_FILE}"
-
-echo "::endgroup::"
+  echo "Config written to ${CONFIG_FILE}:"
+  cat "${CONFIG_FILE}"
+  echo "::endgroup::"
+fi
 
 echo "::group::Deploy Nebari platform via NIC"
 

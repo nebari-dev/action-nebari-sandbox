@@ -59,6 +59,17 @@ inputs:
         (add actions/setup-go before this action).
     required: false
     default: "latest"
+  nic-config:
+    description: >
+      Path to a consumer-supplied NIC config file (platform profile only).
+      When set, the action skips its built-in config template and passes
+      this file to `nic deploy -f` directly. The consumer is responsible
+      for matching the rest of the action's setup — if their config
+      overrides `cluster.local.kube_context` or `git_repository.url`,
+      it must point at what the action actually provisioned. When unset
+      (default), the action generates its standard config as before.
+    required: false
+    default: ""
 
 outputs:
   kubeconfig:
@@ -120,6 +131,7 @@ runs:
         CLUSTER_NAME: ${{ inputs.cluster-name }}
         GITOPS_DIR: ${{ steps.create-cluster.outputs.gitops-dir }}
         NEBARI_TIMING_REPORT: ${{ inputs.timing-report }}
+        NIC_CONFIG: ${{ inputs.nic-config }}
 
     - name: Extract platform outputs
       if: inputs.profile == 'platform'
