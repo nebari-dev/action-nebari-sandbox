@@ -49,6 +49,25 @@ inputs:
         (add actions/setup-go before this action).
     required: false
     default: "latest"
+  nic-config:
+    description: >
+      Path to a consumer-supplied NIC config file (platform profile only).
+      When set, the action skips its built-in config template and passes
+      this file to `nic deploy -f` directly. The consumer is responsible
+      for matching the rest of the action's setup — two fields in
+      particular must point at what the action actually provisioned:
+
+        - `cluster.local.kube_context` — derived as `k3d-<cluster-name>`
+          (e.g. `k3d-nebari-test` for the default cluster-name).
+        - `git_repository.url` — derived as
+          `file:///tmp/nebari-gitops-<cluster-name>` (a hostPath mount
+          into the k3d node so ArgoCD's repo-server can read it).
+
+      The action does not validate these; NIC's config parser will surface
+      real mismatches at deploy time. When unset (default), the action
+      generates its standard config as before.
+    required: false
+    default: ""
 
 outputs:
   kubeconfig:
@@ -110,6 +129,7 @@ runs:
         CLUSTER_NAME: ${{ inputs.cluster-name }}
         GITOPS_DIR: ${{ steps.create-cluster.outputs.gitops-dir }}
         NEBARI_TIMING_REPORT: ${{ inputs.timing-report }}
+        NIC_CONFIG: ${{ inputs.nic-config }}
 
     - name: Extract platform outputs
       if: inputs.profile == 'platform'

@@ -1,0 +1,109 @@
+name: Test nic-config input (issue #39)
+
+# End-to-end test for the `nic-config` input. Writes a consumer-style
+# config file with a project_name that DOES NOT match the cluster name,
+# runs the action with `nic-config:` pointing at it, verifies the cluster
+# comes up AND that NIC wrote back a config carrying the consumer's
+# project_name (which the action's auto-generated template would not have
+# produced — it always uses cluster_name).
+#
+# Triggered manually or on PRs that touch the relevant code. Not on every
+# PR, since this is a full platform bootstrap.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/deploy-platform.sh'
+      - 'action.yml'
+      - '.github/workflows/test-nic-config.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  consumer-supplied-config:
+    name: "platform with consumer-supplied nic-config"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Write a consumer-supplied NIC config
+        # project_name is deliberately set to a custom-test-project sentinel
+        # so we can prove (later) that NIC consumed THIS file rather than
+        # the action's auto-template (which would set project_name to the
+        # cluster name).
+        run: |
+          mkdir -p /tmp/nebari-gitops-test-nic-config
+          cat > /tmp/my-nic-config.yaml <<'EOF'
+          project_name: custom-test-project
+          domain: nebari.local
+          certificate:
+            type: selfsigned
+          git_repository:
+            url: "file:///tmp/nebari-gitops-test-nic-config"
+            branch: main
+          cluster:
+            local:
+              kube_context: "k3d-test-nic-config"
+              node_selectors:
+                general:
+                  kubernetes.io/os: linux
+                user:
+                  kubernetes.io/os: linux
+                worker:
+                  kubernetes.io/os: linux
+          EOF
+          echo "--- consumer config ---"
+          cat /tmp/my-nic-config.yaml
+
+      - name: Setup Nebari Sandbox (with nic-config)
+        id: sandbox
+        uses: ./
+        with:
+          profile: platform
+          cluster-name: test-nic-config
+          nic-config: /tmp/my-nic-config.yaml
+
+      - name: Assert NIC consumed the consumer-supplied config
+        # NIC writes its (scrubbed) config back to the GitOps repo as
+        # nic-config.yaml. If the action's auto-template had been used,
+        # project_name would equal the cluster name (test-nic-config).
+        # If our supplied config was used, project_name is the sentinel.
+        run: |
+          set -euo pipefail
+          REPO_CONFIG="/tmp/nebari-gitops-test-nic-config/nic-config.yaml"
+          [ -f "${REPO_CONFIG}" ] || { echo "::error::NIC did not write ${REPO_CONFIG}"; exit 1; }
+          echo "--- repo-side NIC config ---"
+          cat "${REPO_CONFIG}"
+          echo "--- assertion ---"
+          if grep -qE '^project_name:[[:space:]]+custom-test-project[[:space:]]*$' "${REPO_CONFIG}"; then
+            echo "OK: NIC used the consumer-supplied config (project_name=custom-test-project)."
+          else
+            echo "::error::NIC's repo config does not carry the consumer's project_name. Action probably ignored nic-config and used its auto-template."
+            grep '^project_name:' "${REPO_CONFIG}" || true
+            exit 1
+          fi
+
+      - name: Smoke-check cluster health
+        env:
+          KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+        run: |
+          kubectl get nodes
+          kubectl get applications -n argocd
+
+      - name: Debug on failure
+        if: failure()
+        run: |
+          kubectl get pods -A || true
+          kubectl get applications -n argocd -o wide || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }} 2>/dev/null || true
+          if [[ -n "${{ steps.sandbox.outputs.network-name }}" ]]; then
+            docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
+          fi
