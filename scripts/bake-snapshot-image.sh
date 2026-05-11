@@ -73,21 +73,33 @@ echo "token captured: ${TOKEN_BYTES} bytes -> ${OUTPUT_TOKEN_FILE}"
 [ "${TOKEN_BYTES}" -gt 0 ] || { echo "::error::empty token"; exit 1; }
 echo "::endgroup::"
 
-echo "::group::Bake image via docker create + cp + commit"
-# We do NOT use `docker build` / BuildKit. BuildKit's COPY resets file
-# ownership to root:root regardless of source UIDs, which destroys the
-# postgres (UID 999) and other workload-specific ownership inside the
-# snapshot tree. The create+cp+commit path uses tar streams under the hood
-# which preserve UID/GID metadata.
+echo "::group::Tar the snapshot state preserving UIDs"
+# rancher/k3s declares VOLUME /var/lib/rancher/k3s, so docker commit can't
+# capture data written there with docker cp (VOLUME paths are excluded from
+# commit). Back to a Dockerfile, but using the LEGACY builder + ADD-with-
+# tarball pattern: legacy builder's ADD auto-extracts tar archives and
+# preserves the UID/GID metadata from the tar (BuildKit's COPY does not).
 T=$(_t)
-TMP_CTR=$(sudo docker create "rancher/k3s:v${K8S_VERSION}-k3s1" noop-server 2>/dev/null)
-echo "tmp container: ${TMP_CTR}"
-# docker cp follows the well-known "trailing-/." convention to copy directory
-# contents (not the directory itself) into the destination.
-sudo docker cp "${BUILD_DIR}/state/." "${TMP_CTR}:/var/lib/rancher/k3s/"
-sudo docker commit "${TMP_CTR}" "${IMAGE_TAG}" >/dev/null
-sudo docker rm "${TMP_CTR}" >/dev/null
-echo "bake (create+cp+commit): $(($(_t) - T))s"
+sudo tar -C "${BUILD_DIR}/state" -cf "${BUILD_DIR}/state.tar" .
+sudo rm -rf "${BUILD_DIR}/state"
+echo "tar: $(($(_t) - T))s"
+ls -lh "${BUILD_DIR}/state.tar"
+echo "::endgroup::"
+
+echo "::group::Write Dockerfile"
+cat > "${BUILD_DIR}/Dockerfile" <<DOCKERFILE
+FROM rancher/k3s:v${K8S_VERSION}-k3s1
+ADD state.tar /var/lib/rancher/k3s
+DOCKERFILE
+cat "${BUILD_DIR}/Dockerfile"
+echo "::endgroup::"
+
+echo "::group::docker build (legacy builder, preserves tar UIDs)"
+T=$(_t)
+# DOCKER_BUILDKIT=0 forces the legacy builder. BuildKit-mode rewrites tar
+# metadata on ADD; legacy mode preserves it.
+sudo DOCKER_BUILDKIT=0 docker build -t "${IMAGE_TAG}" "${BUILD_DIR}" >/dev/null
+echo "docker build (legacy): $(($(_t) - T))s"
 docker image ls "${IMAGE_TAG}"
 echo "::endgroup::"
 
