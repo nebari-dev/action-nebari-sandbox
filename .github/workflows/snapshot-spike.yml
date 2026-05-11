@@ -1,0 +1,121 @@
+name: Snapshot spike (issue #33)
+
+# Two-job pipeline that:
+#   1. Bootstraps the platform profile normally, then snapshots the k3d server
+#      container + the GitOps hostPath dir, uploads both as a short-lived
+#      workflow artifact.
+#   2. Downloads the artifact, restores the cluster from the snapshot image,
+#      and verifies the platform is present without running `nic deploy`.
+#
+# Triggered manually or on PRs that touch the spike's own files. Does NOT
+# run on every push to keep CI cost predictable.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/snapshot-cluster.sh'
+      - 'scripts/restore-cluster.sh'
+      - '.github/workflows/snapshot-spike.yml'
+
+jobs:
+  snapshot:
+    name: "Bootstrap + snapshot"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: false
+
+      - name: Cache NIC Go modules and build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: nic-go-${{ runner.os }}-${{ hashFiles('scripts/install-nic.sh') }}
+          restore-keys: |
+            nic-go-${{ runner.os }}-
+
+      - name: Setup Nebari Sandbox (normal flow)
+        id: sandbox
+        uses: ./
+        with:
+          profile: platform
+          cluster-name: spike-source
+
+      - name: Snapshot the cluster
+        run: bash scripts/snapshot-cluster.sh spike-source /tmp/spike-artifact
+
+      - name: Upload snapshot bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-snapshot
+          path: /tmp/spike-artifact/
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Cleanup source cluster
+        if: always()
+        run: |
+          k3d cluster delete spike-source 2>/dev/null || true
+          docker network rm nebari-spike-source-net 2>/dev/null || true
+
+  restore:
+    name: "Restore + verify"
+    needs: snapshot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install k3d (no Go, no NIC needed)
+        run: bash scripts/install-k3d.sh
+        env:
+          K3D_VERSION: "5.8.3"
+
+      - name: Download snapshot bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: platform-snapshot
+          path: /tmp/spike-artifact/
+
+      - name: Restore cluster from snapshot
+        id: restore
+        run: bash scripts/restore-cluster.sh /tmp/spike-artifact spike-restored
+
+      - name: Probe restored cluster for platform health
+        run: |
+          echo "::group::Wait briefly for pods to settle"
+          # Don't fail hard yet — we want to see partial recovery if it's not perfect.
+          kubectl wait --for=condition=Ready pods --all -A --timeout=120s || true
+          echo "::endgroup::"
+
+          echo "::group::Final pod state"
+          kubectl get pods -A
+          echo "::endgroup::"
+
+          echo "::group::ArgoCD Application sync state"
+          kubectl get applications -n argocd -o wide 2>/dev/null || echo "(no Applications visible)"
+          echo "::endgroup::"
+
+      - name: Restore timing summary
+        if: always()
+        run: |
+          echo "## Snapshot Restore Spike — Timing" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Phase | Notes |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| total restore wall-clock | ${{ steps.restore.outputs.total_restore_seconds || 'n/a' }}s |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Compare against the normal platform-profile bootstrap (~140s baseline)." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          k3d cluster delete spike-restored 2>/dev/null || true
+          docker network rm nebari-spike-restored-net 2>/dev/null || true
