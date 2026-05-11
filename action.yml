@@ -107,6 +107,10 @@ runs:
       run: ${{ github.action_path }}/scripts/install-nic.sh
       env:
         NIC_VERSION: ${{ inputs.nic-version }}
+        # Used by install-nic.sh for authenticated GitHub API calls (release
+        # metadata + checksums.txt). Avoids the 60/hr unauthenticated rate
+        # limit, which can bite on self-hosted runners sharing an egress IP.
+        GITHUB_TOKEN: ${{ github.token }}
 
     - name: Deploy platform
       if: inputs.profile == 'platform'
