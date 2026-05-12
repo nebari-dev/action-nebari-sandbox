@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    paths:
+      - 'action.yml'
+      - 'scripts/**'
+      - 'tests/**'
+      - '.github/workflows/test-action.yml'
   workflow_dispatch:
 
 concurrency:
