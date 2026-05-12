@@ -5,8 +5,10 @@ inputs:
   profile:
     description: >
       Deployment profile.
-      - cluster-only: k3d cluster + kubeconfig, no NIC (fast, ~15s).
+      - cluster-only: k3d cluster + kubeconfig, no NIC.
       - platform: full foundational stack via NIC/ArgoCD.
+      See the Profiles table in the README for current median wall-clock
+      durations (auto-refreshed via the benchmark-timings workflow).
     required: false
     default: "cluster-only"
   cluster-name:
