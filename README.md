@@ -23,10 +23,12 @@
 
 ## Profiles
 
-| Profile | What it does | Speed |
+| Profile | What it does | Median wall-clock |
 |---------|-------------|-------|
-| `cluster-only` | k3d cluster + kubeconfig | ~15s |
-| `platform` | Full Nebari foundational stack via NIC/ArgoCD | ~5-10min |
+| `cluster-only` | k3d cluster + kubeconfig | [![cluster-only median](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fgist.githubusercontent.com%2Fviniciusdc%2Fc975a2e1ee21dd788ea32416e7a57506%2Fraw%2Fbenchmark.json&query=%24.cluster_only_seconds&label=median&suffix=s&color=informational)](https://github.com/nebari-dev/action-nebari-sandbox/actions/workflows/benchmark-timings.yml) |
+| `platform` | Full Nebari foundational stack via NIC/ArgoCD | [![platform median](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fgist.githubusercontent.com%2Fviniciusdc%2Fc975a2e1ee21dd788ea32416e7a57506%2Fraw%2Fbenchmark.json&query=%24.platform_seconds&label=median&suffix=s&color=informational)](https://github.com/nebari-dev/action-nebari-sandbox/actions/workflows/benchmark-timings.yml) * |
+
+<sub>\* Default `nic-version: latest` (pre-built binary). Passing a branch, sha, or `.` builds NIC from source, which adds roughly 2-3 minutes depending on the Go module cache state. Badges are refreshed manually via the [benchmark-timings workflow](.github/workflows/benchmark-timings.yml) — see #42.</sub>
 
 ## Usage
 
@@ -107,7 +109,7 @@ steps:
 
 | name | description | required | default |
 | --- | --- | --- | --- |
-| `profile` | <p>Deployment profile. - cluster-only: k3d cluster + kubeconfig, no NIC (fast, ~15s). - platform: full foundational stack via NIC/ArgoCD.</p> | `false` | `cluster-only` |
+| `profile` | <p>Deployment profile. - cluster-only: k3d cluster + kubeconfig, no NIC. - platform: full foundational stack via NIC/ArgoCD. See the Profiles table in the README for current median wall-clock durations (auto-refreshed via the benchmark-timings workflow).</p> | `false` | `cluster-only` |
 | `cluster-name` | <p>Name for the k3d cluster (must be unique on the runner)</p> | `false` | `nebari-test` |
 | `k8s-version` | <p>Kubernetes version to use (maps to a k3d image tag)</p> | `false` | `1.32.4` |
 | `k3d-version` | <p>k3d version to install</p> | `false` | `5.8.3` |

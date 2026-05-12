@@ -7,15 +7,18 @@ name: Benchmark profile timings (issue #42)
 # without anyone hand-editing the table.
 #
 # Setup required (one-time):
-#   1. Create an empty gist under any account (it'll hold one file,
-#      `benchmark.json`).
-#   2. Generate a fine-grained PAT with `gist:write` scoped to that gist.
+#   1. Create a gist under any account. GitHub doesn't allow a truly
+#      empty gist, so seed it with a placeholder file (e.g. `.keep`);
+#      this workflow adds `benchmark.json` on first run.
+#   2. Generate a classic PAT with the `gist` scope. Fine-grained PATs
+#      do not currently support gist access.
 #   3. Set the repo secret `BENCHMARK_GIST_TOKEN` to that PAT.
 #   4. Set the repo variable `BENCHMARK_GIST_ID` to the gist id (the hex
 #      string from the gist URL — not the full URL).
 #   5. Run this workflow once manually to populate the gist.
-#   6. Open a follow-up PR wiring the gist's raw URL into the README's
-#      Profiles table as shields.io dynamic-JSON badges.
+#   6. Wire the gist's raw URL into the README's Profiles table as
+#      shields.io dynamic-JSON badges (see the badges currently in
+#      README.md for the URL shape).
 
 on:
   workflow_dispatch:
