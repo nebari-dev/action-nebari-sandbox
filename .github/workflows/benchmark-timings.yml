@@ -6,19 +6,17 @@ name: Benchmark profile timings (issue #42)
 # gist via shields.io dynamic-JSON badges so the numbers stay fresh
 # without anyone hand-editing the table.
 #
-# Setup required (one-time):
-#   1. Create a gist under any account. GitHub doesn't allow a truly
-#      empty gist, so seed it with a placeholder file (e.g. `.keep`);
-#      this workflow adds `benchmark.json` on first run.
-#   2. Generate a classic PAT with the `gist` scope. Fine-grained PATs
-#      do not currently support gist access.
-#   3. Set the repo secret `BENCHMARK_GIST_TOKEN` to that PAT.
-#   4. Set the repo variable `BENCHMARK_GIST_ID` to the gist id (the hex
-#      string from the gist URL — not the full URL).
-#   5. Run this workflow once manually to populate the gist.
-#   6. Wire the gist's raw URL into the README's Profiles table as
-#      shields.io dynamic-JSON badges (see the badges currently in
-#      README.md for the URL shape).
+# Inputs from the repo's Actions config (already in place; see #42):
+#   - secret  BENCHMARK_GIST_TOKEN — classic PAT scoped to `gist`.
+#       Authenticates the `gh api -X PATCH gists/<id>` call in the
+#       aggregate job. Must be classic; fine-grained PATs do not
+#       currently support gist access.
+#   - variable BENCHMARK_GIST_ID — hex id of the target gist (not the
+#       full URL). The gist holds a single `benchmark.json` file; the
+#       README's shields.io dynamic-JSON badges read from it directly.
+#
+# If either is missing the aggregate job fails hard with a clear
+# ::error:: rather than silently no-op'ing.
 
 on:
   workflow_dispatch:
