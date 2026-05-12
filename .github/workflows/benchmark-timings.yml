@@ -1,0 +1,239 @@
+name: Benchmark profile timings (issue #42)
+
+# Manually-triggered benchmark for the action's per-profile spinup time.
+# Runs each requested profile N times on cold runners, takes the median,
+# and patches a gist with the resulting JSON. The README references that
+# gist via shields.io dynamic-JSON badges so the numbers stay fresh
+# without anyone hand-editing the table.
+#
+# Setup required (one-time):
+#   1. Create an empty gist under any account (it'll hold one file,
+#      `benchmark.json`).
+#   2. Generate a fine-grained PAT with `gist:write` scoped to that gist.
+#   3. Set the repo secret `BENCHMARK_GIST_TOKEN` to that PAT.
+#   4. Set the repo variable `BENCHMARK_GIST_ID` to the gist id (the hex
+#      string from the gist URL — not the full URL).
+#   5. Run this workflow once manually to populate the gist.
+#   6. Open a follow-up PR wiring the gist's raw URL into the README's
+#      Profiles table as shields.io dynamic-JSON badges.
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Which profile to benchmark"
+        type: choice
+        options: [both, cluster-only, platform]
+        default: both
+      samples:
+        description: "Runs per profile (median taken across these)"
+        type: choice
+        options: ["3", "5", "7"]
+        default: "3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  matrix-setup:
+    runs-on: ubuntu-24.04
+    outputs:
+      indices: ${{ steps.gen.outputs.indices }}
+    steps:
+      - id: gen
+        run: |
+          N=${{ inputs.samples }}
+          INDICES="[$(seq -s ',' 1 $N)]"
+          echo "indices=$INDICES" >> "$GITHUB_OUTPUT"
+          echo "Will run $N samples per profile: $INDICES"
+
+  cluster-only:
+    needs: matrix-setup
+    if: inputs.profile == 'both' || inputs.profile == 'cluster-only'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        sample: ${{ fromJSON(needs.matrix-setup.outputs.indices) }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Mark start
+        id: mark
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./
+        id: sandbox
+        with:
+          profile: cluster-only
+          cluster-name: bench-cluster-only-${{ matrix.sample }}
+
+      - name: Record sample duration
+        run: |
+          end=$(date +%s)
+          duration=$(( end - ${{ steps.mark.outputs.epoch }} ))
+          mkdir -p artifacts
+          echo "$duration" > "artifacts/cluster-only-${{ matrix.sample }}.txt"
+          echo "cluster-only sample ${{ matrix.sample }}: ${duration}s"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: timing-cluster-only-${{ matrix.sample }}
+          path: artifacts/
+
+      - name: Cleanup
+        if: always()
+        run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }} 2>/dev/null || true
+
+  platform:
+    needs: matrix-setup
+    if: inputs.profile == 'both' || inputs.profile == 'platform'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        sample: ${{ fromJSON(needs.matrix-setup.outputs.indices) }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Mark start
+        id: mark
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./
+        id: sandbox
+        with:
+          profile: platform
+          cluster-name: bench-platform-${{ matrix.sample }}
+
+      - name: Record sample duration
+        run: |
+          end=$(date +%s)
+          duration=$(( end - ${{ steps.mark.outputs.epoch }} ))
+          mkdir -p artifacts
+          echo "$duration" > "artifacts/platform-${{ matrix.sample }}.txt"
+          echo "platform sample ${{ matrix.sample }}: ${duration}s"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: timing-platform-${{ matrix.sample }}
+          path: artifacts/
+
+      - name: Cleanup
+        if: always()
+        run: |
+          k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }} 2>/dev/null || true
+          if [[ -n "${{ steps.sandbox.outputs.network-name }}" ]]; then
+            docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
+          fi
+
+  aggregate:
+    needs: [matrix-setup, cluster-only, platform]
+    # Run even if a matrix branch was skipped (e.g. profile=cluster-only
+    # skips the platform job). Don't run if cancelled.
+    if: always() && !cancelled() && (needs.cluster-only.result != 'failure' && needs.platform.result != 'failure')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: timing-*
+          merge-multiple: true
+          path: timings
+
+      - name: Compute medians
+        id: medians
+        run: |
+          set -euo pipefail
+          compute_median() {
+            local profile=$1
+            shopt -s nullglob
+            local files=( timings/${profile}-*.txt )
+            shopt -u nullglob
+            if [ ${#files[@]} -eq 0 ]; then
+              echo "null"
+              return
+            fi
+            local values=()
+            for f in "${files[@]}"; do
+              values+=( "$(cat "$f")" )
+            done
+            IFS=$'\n' read -r -d '' -a sorted < <(printf '%s\n' "${values[@]}" | sort -n && printf '\0')
+            local n=${#sorted[@]}
+            # Lower-median for even N so we always emit an integer second.
+            if (( n % 2 == 1 )); then
+              echo "${sorted[$((n/2))]}"
+            else
+              echo "${sorted[$((n/2 - 1))]}"
+            fi
+          }
+          co=$(compute_median cluster-only)
+          pl=$(compute_median platform)
+          echo "cluster_only=$co" >> "$GITHUB_OUTPUT"
+          echo "platform=$pl" >> "$GITHUB_OUTPUT"
+          echo "cluster-only median: $co"
+          echo "platform median: $pl"
+
+      - name: Build payload
+        id: payload
+        env:
+          CO: ${{ steps.medians.outputs.cluster_only }}
+          PL: ${{ steps.medians.outputs.platform }}
+          SAMPLES: ${{ inputs.samples }}
+        run: |
+          set -euo pipefail
+          # `null` (literal string, no quotes) is how shields.io's
+          # dynamic/json badge handles "not measured this run". Both
+          # medians emit `null` when the corresponding job was skipped.
+          cat > benchmark.json <<EOF
+          {
+            "updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "run_id": "${{ github.run_id }}",
+            "commit": "${{ github.sha }}",
+            "samples": ${SAMPLES},
+            "cluster_only_seconds": ${CO},
+            "platform_seconds": ${PL},
+            "platform_from_source_seconds": null
+          }
+          EOF
+          echo "--- payload ---"
+          cat benchmark.json
+
+      - name: Patch gist
+        env:
+          GH_TOKEN: ${{ secrets.BENCHMARK_GIST_TOKEN }}
+          GIST_ID: ${{ vars.BENCHMARK_GIST_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN}" ]]; then
+            echo "::error::BENCHMARK_GIST_TOKEN secret is unset. See the setup block at the top of this workflow."
+            exit 1
+          fi
+          if [[ -z "${GIST_ID}" ]]; then
+            echo "::error::BENCHMARK_GIST_ID variable is unset. See the setup block at the top of this workflow."
+            exit 1
+          fi
+          # gh api wants the file content as a JSON-encoded string nested
+          # under files.<filename>.content. jq builds it without us having
+          # to wrestle bash quoting around newlines.
+          jq -n --rawfile body benchmark.json \
+            '{ files: { "benchmark.json": { content: $body } } }' \
+            > /tmp/patch.json
+          gh api -X PATCH "gists/${GIST_ID}" --input /tmp/patch.json
+          echo "Gist patched: https://gist.github.com/${GIST_ID}"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Benchmark results"
+            echo ""
+            echo "| profile | median (s) | samples |"
+            echo "|---------|------------|---------|"
+            echo "| cluster-only | ${{ steps.medians.outputs.cluster_only }} | ${{ inputs.samples }} |"
+            echo "| platform | ${{ steps.medians.outputs.platform }} | ${{ inputs.samples }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
