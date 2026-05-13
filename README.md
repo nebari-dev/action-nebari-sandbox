@@ -218,10 +218,14 @@ the workflow free of extra `uses:` lines:
     envsubst < my-app-application.yaml > "${GITOPS_DIR}/apps/my-app.yaml"
 
     # 3. Commit. ${GITOPS_DIR} is a git working tree; ArgoCD reads HEAD.
-    git -C "${GITOPS_DIR}" config user.email ci@ci
-    git -C "${GITOPS_DIR}" config user.name  ci
+    #    Use `-c` flags instead of `git config` so the identity stays
+    #    request-scoped — otherwise it leaks into ${GITOPS_DIR}/.git/config
+    #    and any subsequent `git` call inherits it.
     git -C "${GITOPS_DIR}" add -A
-    git -C "${GITOPS_DIR}" commit -m "add my-app"
+    git -C "${GITOPS_DIR}" \
+      -c user.email=ci@my-app \
+      -c user.name=my-app-ci \
+      commit -m "add my-app"
 
     # 4. Re-fix perms. argocd-repo-server runs as uid 999 in-cluster.
     chmod -R a+rX "${GITOPS_DIR}"
