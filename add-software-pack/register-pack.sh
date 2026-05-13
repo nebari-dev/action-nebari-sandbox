@@ -48,11 +48,14 @@ cp -r "${CHART_SOURCE}/." "${CHART_DEST}/"
 export GITOPS_DIR
 envsubst < "${APPLICATION_MANIFEST}" > "${APP_DEST}"
 
-# ── 3. Commit. Scoped to this repo's config — never touches global git. ──────
-git -C "${GITOPS_DIR}" config user.email "${GIT_AUTHOR_EMAIL:-add-software-pack@action-nebari-sandbox}"
-git -C "${GITOPS_DIR}" config user.name  "${GIT_AUTHOR_NAME:-add-software-pack}"
+# ── 3. Commit. Identity is request-scoped via `-c` flags so we don't leak ────
+# author info into ${GITOPS_DIR}/.git/config; if the consumer's workflow
+# also runs `git` against the gitops repo afterwards, they see no surprises.
 git -C "${GITOPS_DIR}" add -A
-git -C "${GITOPS_DIR}" commit -m "${COMMIT_MESSAGE:-add ${APP_NAME}}"
+git -C "${GITOPS_DIR}" \
+  -c user.email="${GIT_AUTHOR_EMAIL:-add-software-pack@action-nebari-sandbox}" \
+  -c user.name="${GIT_AUTHOR_NAME:-add-software-pack}" \
+  commit -m "${COMMIT_MESSAGE:-add ${APP_NAME}}"
 
 # ── 4. chmod fixup. argocd-repo-server runs as uid 999 inside the cluster ────
 # and can't read files written with default runner-uid-only perms.

@@ -21,10 +21,11 @@ inputs:
       name under `${gitops-dir}/` for chart content, and as the filename
       (with `.yaml` appended) under `${gitops-dir}/apps/` for the Application
       manifest. Must be a simple identifier — slashes and `.`/`..` segments
-      are rejected. Collides intentionally with a foundational filename
-      (`cert-manager`, `keycloak`, `postgresql`, `nebari-landingpage`, etc.)
-      replaces that Application — that's a valid override path, but it's
-      your responsibility to know you're doing it.
+      are rejected. Using a foundational filename (`cert-manager`, `keycloak`,
+      `postgresql`, `nebari-landingpage`, etc.) replaces that Application
+      rather than adding a new one — that's a valid override path (e.g. for
+      swapping in a dev build of a foundational component), but it's your
+      responsibility to know you're doing it.
     required: true
   chart-source:
     description: >
