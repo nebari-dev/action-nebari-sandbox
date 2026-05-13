@@ -94,10 +94,13 @@ EOF
 
 # ── Step 3: commit ──────────────────────────────────────────────────────────
 # gitops-dir is a git working tree; ArgoCD's repo-server reads from HEAD.
-git -C "${GITOPS_DIR}" config user.email ci@ci
-git -C "${GITOPS_DIR}" config user.name  ci
+# Use `-c` flags rather than `git config` so we don't persist identity into
+# .git/config — subsequent scenarios should start clean.
 git -C "${GITOPS_DIR}" add -A
-git -C "${GITOPS_DIR}" commit -m "test: add ${APP_NAME}"
+git -C "${GITOPS_DIR}" \
+  -c user.email=ci@nebari-sandbox \
+  -c user.name=nebari-sandbox-scenario \
+  commit -m "test: add ${APP_NAME}"
 
 # ── Step 4: re-fix perms ─────────────────────────────────────────────────────
 # The action's background chmod loop has exited by now; new files default to
@@ -131,10 +134,17 @@ kubectl wait --for=condition=available deployment/${APP_NAME} \
   -n default --timeout=60s
 
 # ── Cleanup so subsequent scenarios start clean ──────────────────────────────
-kubectl delete application/${APP_NAME} -n argocd --wait --timeout=60s 2>/dev/null || true
+# Remove the manifest from gitops FIRST and commit, so the root App-of-Apps
+# sees an empty source-of-truth on its next reconcile and prunes the
+# consumer Application. Reversing the order (kubectl delete first) races
+# the root reconcile: it'd recreate the Application from the still-present
+# apps/${APP_NAME}.yaml before we get to remove it.
 rm -f "${GITOPS_DIR}/apps/${APP_NAME}.yaml"
 rm -rf "${GITOPS_DIR}/${APP_NAME}"
 git -C "${GITOPS_DIR}" add -A
-git -C "${GITOPS_DIR}" commit -m "test: clean up ${APP_NAME}" 2>/dev/null || true
+git -C "${GITOPS_DIR}" \
+  -c user.email=ci@nebari-sandbox \
+  -c user.name=nebari-sandbox-scenario \
+  commit -m "test: clean up ${APP_NAME}" 2>/dev/null || true
 
 echo "OK: consumer-app deployed via App-of-Apps, reached Healthy, workload available."
