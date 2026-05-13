@@ -1,0 +1,67 @@
+name: "Add Software Pack"
+description: >
+  Register a consumer Application + chart content into the platform's
+  GitOps repo so NIC's root App-of-Apps reconciles a new ArgoCD Application
+  on top of the foundational stack. Wraps the copy → envsubst → commit →
+  chmod ritual that's otherwise boilerplate every consumer would have to
+  repeat. Intended to follow a platform-profile invocation of the parent
+  action.
+
+inputs:
+  gitops-dir:
+    description: >
+      Path to the platform GitOps directory. Use the parent action's
+      `gitops-dir` output. The directory must already exist and contain
+      an `apps/` subdirectory (NIC seeds this during the platform profile
+      bootstrap).
+    required: true
+  app-name:
+    description: >
+      Identifier for this consumer pack. Used as the destination directory
+      name under `${gitops-dir}/` for chart content, and as the filename
+      (with `.yaml` appended) under `${gitops-dir}/apps/` for the Application
+      manifest. Must be a simple identifier — slashes and `.`/`..` segments
+      are rejected. Collides intentionally with a foundational filename
+      (`cert-manager`, `keycloak`, `postgresql`, `nebari-landingpage`, etc.)
+      replaces that Application — that's a valid override path, but it's
+      your responsibility to know you're doing it.
+    required: true
+  chart-source:
+    description: >
+      Local directory on the runner containing chart/manifest content to
+      copy into `${gitops-dir}/${app-name}/`. Anything ArgoCD can resolve
+      from a `file://` repo (Helm chart, kustomize tree, plain manifests).
+    required: true
+  application-manifest:
+    description: >
+      Local path on the runner to the consumer's ArgoCD Application YAML.
+      `envsubst`-rendered before write, so the file can reference `${GITOPS_DIR}`
+      (and any other env vars in scope) in fields like `spec.source.repoURL`.
+    required: true
+  commit-message:
+    description: >
+      Optional override for the git commit message written to the GitOps
+      working tree. Defaults to `add ${app-name}`.
+    required: false
+    default: ""
+
+outputs:
+  chart-dest:
+    description: "Absolute path the chart-source was copied to (i.e. ${gitops-dir}/${app-name}/)."
+    value: ${{ steps.register.outputs.chart-dest }}
+  application-dest:
+    description: "Absolute path the rendered Application manifest was written to (i.e. ${gitops-dir}/apps/${app-name}.yaml)."
+    value: ${{ steps.register.outputs.application-dest }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: register
+      shell: bash
+      run: ${{ github.action_path }}/register-pack.sh
+      env:
+        GITOPS_DIR: ${{ inputs.gitops-dir }}
+        APP_NAME: ${{ inputs.app-name }}
+        CHART_SOURCE: ${{ inputs.chart-source }}
+        APPLICATION_MANIFEST: ${{ inputs.application-manifest }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
