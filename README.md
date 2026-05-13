@@ -94,6 +94,173 @@ steps:
 > if you want to build NIC from source — that path needs `actions/setup-go`
 > in your workflow before this action.
 
+### platform + consumer app via GitOps
+
+Most consumers don't just want to spin up the platform — they want to deploy
+their own application on top of it and run an end-to-end test. The `platform`
+profile leaves a fully-bootstrapped local git repository at
+`${{ steps.sandbox.outputs.gitops-dir }}` (default `/tmp/nebari-gitops-<cluster>`)
+bind-mounted into the k3d node. NIC seeds it with a root
+[App-of-Apps](https://argo-cd.readthedocs.io/en/stable/operator-manual/cluster-bootstrapping/)
+(`Application/nebari-root`) that watches `${GITOPS_DIR}/apps/` for any `*.yaml`
+and creates the corresponding ArgoCD `Application` automatically. Drop your
+consumer Application manifest into that directory and the platform takes care
+of the rest.
+
+The foundational stack lives there too — knowing the filenames matters because
+reusing one means deliberately *replacing* that Application:
+
+```
+${GITOPS_DIR}/
+    apps/                            (root App-of-Apps watches this directory)
+        cert-manager.yaml
+        cluster-issuers.yaml
+        gateway-config.yaml
+        httproutes.yaml
+        keycloak.yaml
+        metallb.yaml
+        nebari-landingpage.yaml
+        postgresql.yaml
+        root.yaml                    (the App-of-Apps itself; excluded from its own watch)
+    manifests/                       (raw manifests referenced by foundational Apps)
+    nic-config.yaml                  (scrubbed config NIC writes back)
+```
+
+#### Recommended: use the `add-software-pack` sub-action
+
+Wraps the copy → envsubst → commit → chmod ritual into one step. Your
+`application.yaml` can reference `${GITOPS_DIR}` and any other env vars in
+scope at invocation time:
+
+```yaml
+steps:
+  - uses: actions/checkout@v6
+
+  - uses: nebari-dev/action-nebari-sandbox@v1
+    id: sandbox
+    with:
+      profile: platform
+
+  - uses: nebari-dev/action-nebari-sandbox/add-software-pack@v1
+    with:
+      gitops-dir:           ${{ steps.sandbox.outputs.gitops-dir }}
+      app-name:             my-app
+      chart-source:         ./chart
+      application-manifest: ./my-app-application.yaml
+
+  - name: Wait for ArgoCD to reconcile
+    env:
+      KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+    run: |
+      kubectl wait --for=jsonpath='{.status.health.status}=Healthy' \
+        application/my-app -n argocd --timeout=300s
+      kubectl wait --for=condition=available deployment/my-app \
+        -n default --timeout=120s
+
+  - name: Run integration tests
+    env:
+      KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+      GATEWAY_IP: ${{ steps.sandbox.outputs.gateway-ip }}
+    run: |
+      # your tests against the deployed app here
+
+  - name: Cleanup
+    if: always()
+    run: |
+      k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
+      docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
+```
+
+A minimal `application.yaml` modeled on the foundational landing-page App
+([source](https://github.com/nebari-dev/nebari-infrastructure-core/blob/main/pkg/argocd/templates/apps/nebari-landingpage.yaml)),
+with the `repoURL` pointing at the local gitops repo:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app
+  namespace: argocd
+spec:
+  project: default                            # or `foundational` — both work
+  source:
+    repoURL: "file://${GITOPS_DIR}"           # envsubst-rendered by the sub-action
+    targetRevision: HEAD
+    path: my-app                              # matches `app-name` above
+    directory:
+      recurse: false                          # or use `helm:`, `kustomize:`, etc.
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+```
+
+#### Without the sub-action
+
+If you'd rather not bring in the sub-action, the underlying ritual is four
+steps. Useful when you want fine-grained control over the commit, or to keep
+the workflow free of extra `uses:` lines:
+
+```yaml
+- name: Register my-app
+  env:
+    GITOPS_DIR: ${{ steps.sandbox.outputs.gitops-dir }}
+  run: |
+    # 1. Chart/manifests into the gitops repo
+    cp -r chart/ "${GITOPS_DIR}/my-app/"
+
+    # 2. Application manifest into apps/ (envsubst expands ${GITOPS_DIR})
+    envsubst < my-app-application.yaml > "${GITOPS_DIR}/apps/my-app.yaml"
+
+    # 3. Commit. ${GITOPS_DIR} is a git working tree; ArgoCD reads HEAD.
+    git -C "${GITOPS_DIR}" config user.email ci@ci
+    git -C "${GITOPS_DIR}" config user.name  ci
+    git -C "${GITOPS_DIR}" add -A
+    git -C "${GITOPS_DIR}" commit -m "add my-app"
+
+    # 4. Re-fix perms. argocd-repo-server runs as uid 999 in-cluster.
+    chmod -R a+rX "${GITOPS_DIR}"
+```
+
+#### Customizing the NIC config
+
+If you need the platform itself configured differently (e.g. a different
+domain, a custom certificate, additional `git_repository` settings), pass
+`nic-config` with a path to your own config file. Two fields must match
+what the action actually provisioned — see the input docs for details:
+
+```yaml
+- name: Write a custom NIC config
+  run: |
+    cat > /tmp/my-nic-config.yaml <<'EOF'
+    project_name: my-project
+    domain: nebari.local
+    certificate:
+      type: selfsigned
+    git_repository:
+      url: "file:///tmp/nebari-gitops-my-cluster"
+      branch: main
+    cluster:
+      local:
+        kube_context: "k3d-my-cluster"
+        node_selectors:
+          general: { kubernetes.io/os: linux }
+          user:    { kubernetes.io/os: linux }
+          worker:  { kubernetes.io/os: linux }
+    EOF
+
+- uses: nebari-dev/action-nebari-sandbox@v1
+  with:
+    profile: platform
+    cluster-name: my-cluster
+    nic-config: /tmp/my-nic-config.yaml
+```
+
 <!--
   Inputs and Outputs sections below are auto-generated from action.yml by
   npm's `action-docs` (run by .github/workflows/docs-check.yml on each PR).
