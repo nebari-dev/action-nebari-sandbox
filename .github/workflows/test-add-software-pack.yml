@@ -1,0 +1,155 @@
+name: Test add-software-pack sub-action (issue #47)
+
+# End-to-end test for the `add-software-pack` composite sub-action. Bootstraps
+# the platform via the parent action, then invokes the sub-action with a
+# fixture chart + Application manifest and asserts the resulting ArgoCD
+# Application reaches Healthy. Triggered manually or on PRs that touch the
+# sub-action or anything that could change its semantics.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'add-software-pack/**'
+      - '.github/workflows/test-add-software-pack.yml'
+      - 'action.yml'
+      - 'scripts/deploy-platform.sh'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: "add-software-pack end-to-end"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Prepare fixture pack
+        run: |
+          mkdir -p fixture/chart
+          cat > fixture/chart/workload.yaml <<'EOF'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: e2e-test-app
+            namespace: default
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: e2e-test-app
+            template:
+              metadata:
+                labels:
+                  app: e2e-test-app
+              spec:
+                containers:
+                  - name: nginx
+                    image: nginx:alpine
+                    ports:
+                      - containerPort: 80
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: e2e-test-app
+            namespace: default
+          spec:
+            selector:
+              app: e2e-test-app
+            ports:
+              - port: 80
+                targetPort: 80
+          EOF
+          cat > fixture/application.yaml <<'EOF'
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: e2e-test-app
+            namespace: argocd
+          spec:
+            project: default
+            source:
+              repoURL: "file://${GITOPS_DIR}"
+              targetRevision: HEAD
+              path: e2e-test-app
+              directory:
+                recurse: false
+            destination:
+              server: https://kubernetes.default.svc
+              namespace: default
+            syncPolicy:
+              automated:
+                prune: true
+                selfHeal: true
+              syncOptions:
+                - CreateNamespace=true
+          EOF
+
+      - uses: ./
+        id: sandbox
+        with:
+          profile: platform
+          cluster-name: test-add-software-pack
+
+      - uses: ./add-software-pack
+        id: register
+        with:
+          gitops-dir: ${{ steps.sandbox.outputs.gitops-dir }}
+          app-name: e2e-test-app
+          chart-source: fixture/chart
+          application-manifest: fixture/application.yaml
+
+      - name: Verify sub-action outputs
+        run: |
+          set -euo pipefail
+          EXPECTED_CHART="${{ steps.sandbox.outputs.gitops-dir }}/e2e-test-app"
+          EXPECTED_APP="${{ steps.sandbox.outputs.gitops-dir }}/apps/e2e-test-app.yaml"
+          [[ "${{ steps.register.outputs.chart-dest }}" == "${EXPECTED_CHART}" ]] \
+            || { echo "::error::chart-dest mismatch: got '${{ steps.register.outputs.chart-dest }}', expected '${EXPECTED_CHART}'"; exit 1; }
+          [[ "${{ steps.register.outputs.application-dest }}" == "${EXPECTED_APP}" ]] \
+            || { echo "::error::application-dest mismatch"; exit 1; }
+          [[ -d "${EXPECTED_CHART}" ]] || { echo "::error::chart-dest does not exist on disk"; exit 1; }
+          [[ -f "${EXPECTED_APP}" ]] || { echo "::error::application-dest does not exist on disk"; exit 1; }
+          grep -q "file://${{ steps.sandbox.outputs.gitops-dir }}" "${EXPECTED_APP}" \
+            || { echo "::error::envsubst did not expand \${GITOPS_DIR}"; cat "${EXPECTED_APP}"; exit 1; }
+
+      - name: Wait for ArgoCD sync
+        env:
+          KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+        run: |
+          set -euo pipefail
+          STATUS="(none)"
+          for i in $(seq 1 60); do
+            STATUS=$(kubectl get application/e2e-test-app -n argocd \
+              -o jsonpath='{.status.health.status}' 2>/dev/null || echo "NotFound")
+            echo "  [${i}/60] status: ${STATUS}"
+            [[ "${STATUS}" == "Healthy" ]] && break
+            sleep 5
+          done
+          if [[ "${STATUS}" != "Healthy" ]]; then
+            echo "::error::Application/e2e-test-app did not reach Healthy (last: ${STATUS})"
+            kubectl get application/e2e-test-app -n argocd -o yaml || true
+            exit 1
+          fi
+          kubectl wait --for=condition=available deployment/e2e-test-app \
+            -n default --timeout=60s
+
+      - name: Debug on failure
+        if: failure()
+        env:
+          KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+        run: |
+          kubectl get applications -n argocd -o wide || true
+          kubectl get pods -A || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          k3d cluster delete ${{ steps.sandbox.outputs.cluster-name || 'test-add-software-pack' }} 2>/dev/null || true
+          if [[ -n "${{ steps.sandbox.outputs.network-name }}" ]]; then
+            docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
+          fi
