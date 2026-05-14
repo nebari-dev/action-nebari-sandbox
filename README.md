@@ -299,9 +299,11 @@ what the action actually provisioned — see the input docs for details:
 | `cluster-name` | <p>Name of the created k3d cluster</p> |
 | `network-name` | <p>Docker network created for the cluster (platform profile only). Use this in cleanup steps.</p> |
 | `gitops-dir` | <p>Local GitOps directory mounted into the cluster (platform profile only)</p> |
-| `keycloak-admin-password` | <p>Keycloak admin password (platform profile only)</p> |
+| `keycloak-admin-password` | <p>Keycloak admin password for the <em>master</em> realm (platform profile only). Use <code>keycloak-realm-admin-password</code> for the nebari realm.</p> |
+| `keycloak-realm-admin-password` | <p>Keycloak admin password for the <em>nebari</em> realm (platform profile only). Provisioned asynchronously by NIC's realm-setup PostSync hook after Keycloak becomes Ready, so this output may be empty if the secret has not materialized by the time <code>extract-outputs.sh</code> polls (see #27 for the planned wait-for-realm input). When empty, consumers can fall back to reading the <code>nebari-realm-admin-credentials</code> secret in the <code>keycloak</code> namespace after their own wait-for-realm step.</p> |
 | `argocd-admin-password` | <p>ArgoCD admin password (platform profile only)</p> |
 | `gateway-ip` | <p>MetalLB gateway IP address (platform profile only)</p> |
+| `keycloak-issuer-url` | <p>External public issuer URL for the Keycloak deployment (platform profile only), e.g. <code>https://keycloak.nebari.local</code>. Derived from the <code>domain</code> field in the NIC config NIC wrote to the gitops repo, matching NIC's own formula. Useful for JWT <code>iss</code> claim validation in consumer e2e tests.</p> |
 <!-- action-docs-outputs action="action.yml" -->
 
 ## Cleanup

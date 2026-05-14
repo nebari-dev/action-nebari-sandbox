@@ -71,6 +71,46 @@ jobs:
         env:
           KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
 
+      - name: Verify keycloak-issuer-url output (#25)
+        # Default action config sets `domain: nebari.local`, so the derived
+        # issuer URL must be `https://keycloak.nebari.local`. Asserting the
+        # exact value catches accidental changes to NIC's URL formula (or to
+        # the action's default domain).
+        run: |
+          set -euo pipefail
+          EXPECTED="https://keycloak.nebari.local"
+          ACTUAL="${{ steps.sandbox.outputs.keycloak-issuer-url }}"
+          if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
+            echo "::error::keycloak-issuer-url mismatch: got '${ACTUAL}', expected '${EXPECTED}'"
+            exit 1
+          fi
+          echo "OK: keycloak-issuer-url = ${ACTUAL}"
+
+      - name: Verify keycloak-realm-admin-password reachability (#25)
+        # The output itself is best-effort (timing-dependent on the async
+        # realm-setup PostSync hook), so we don't strictly assert the action
+        # captured it. What we DO assert is that the underlying secret
+        # eventually materializes — which is what consumers care about.
+        # Waits up to 10 min for `job/keycloak-realm-setup` to complete and
+        # then reads the secret. Same shape as the workaround nebari-landing
+        # is running today.
+        env:
+          KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+          OUTPUT_VALUE: ${{ steps.sandbox.outputs.keycloak-realm-admin-password }}
+        run: |
+          set -euo pipefail
+          echo "Output captured by action: $([[ -n "${OUTPUT_VALUE}" ]] && echo "populated (extract-outputs caught it within 30s polling)" || echo "empty (realm-setup ran longer than 30s; consumer falls back to kubectl get secret)")"
+          echo "Waiting for job/keycloak-realm-setup to complete..."
+          kubectl wait --for=condition=complete job/keycloak-realm-setup \
+            -n keycloak --timeout=600s
+          SECRET=$(kubectl -n keycloak get secret nebari-realm-admin-credentials \
+            -o jsonpath='{.data.password}' | base64 -d)
+          if [[ -z "${SECRET}" ]]; then
+            echo "::error::nebari-realm-admin-credentials secret is empty after realm-setup completed"
+            exit 1
+          fi
+          echo "OK: nebari-realm-admin-credentials secret is populated"
+
       - name: Debug cluster state
         if: failure()
         run: |

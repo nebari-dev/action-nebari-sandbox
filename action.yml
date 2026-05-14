@@ -85,14 +85,31 @@ outputs:
     description: "Local GitOps directory mounted into the cluster (platform profile only)"
     value: ${{ steps.create-cluster.outputs.gitops-dir }}
   keycloak-admin-password:
-    description: "Keycloak admin password (platform profile only)"
+    description: "Keycloak admin password for the *master* realm (platform profile only). Use `keycloak-realm-admin-password` for the nebari realm."
     value: ${{ steps.extract-outputs.outputs.keycloak-admin-password }}
+  keycloak-realm-admin-password:
+    description: >
+      Keycloak admin password for the *nebari* realm (platform profile only).
+      Provisioned asynchronously by NIC's realm-setup PostSync hook after
+      Keycloak becomes Ready, so this output may be empty if the secret has
+      not materialized by the time `extract-outputs.sh` polls (see #27 for the
+      planned wait-for-realm input). When empty, consumers can fall back to
+      reading the `nebari-realm-admin-credentials` secret in the `keycloak`
+      namespace after their own wait-for-realm step.
+    value: ${{ steps.extract-outputs.outputs.keycloak-realm-admin-password }}
   argocd-admin-password:
     description: "ArgoCD admin password (platform profile only)"
     value: ${{ steps.extract-outputs.outputs.argocd-admin-password }}
   gateway-ip:
     description: "MetalLB gateway IP address (platform profile only)"
     value: ${{ steps.extract-outputs.outputs.gateway-ip }}
+  keycloak-issuer-url:
+    description: >
+      External public issuer URL for the Keycloak deployment (platform profile
+      only), e.g. `https://keycloak.nebari.local`. Derived from the `domain`
+      field in the NIC config NIC wrote to the gitops repo, matching NIC's own
+      formula. Useful for JWT `iss` claim validation in consumer e2e tests.
+    value: ${{ steps.extract-outputs.outputs.keycloak-issuer-url }}
 
 runs:
   using: "composite"
@@ -138,6 +155,8 @@ runs:
       id: extract-outputs
       shell: bash
       run: ${{ github.action_path }}/scripts/extract-outputs.sh
+      env:
+        GITOPS_DIR: ${{ steps.create-cluster.outputs.gitops-dir }}
 
     - name: Await platform workloads
       if: inputs.profile == 'platform'
