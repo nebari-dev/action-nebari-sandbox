@@ -87,29 +87,34 @@ jobs:
           echo "OK: keycloak-issuer-url = ${ACTUAL}"
 
       - name: Verify keycloak-realm-admin-password reachability (#25)
-        # The output itself is best-effort (timing-dependent on the async
-        # realm-setup PostSync hook), so we don't strictly assert the action
-        # captured it. What we DO assert is that the underlying secret
-        # eventually materializes — which is what consumers care about.
-        # Waits up to 10 min for `job/keycloak-realm-setup` to complete and
-        # then reads the secret. Same shape as the workaround nebari-landing
-        # is running today.
+        # The previous version of this step waited on Job/keycloak-realm-setup
+        # to complete and then read the secret. That doesn't work: the Job
+        # has `argocd.argoproj.io/hook-delete-policy: HookSucceeded`, so
+        # ArgoCD deletes it as soon as it succeeds. By the time this step
+        # runs, `kubectl wait` errors with NotFound.
+        #
+        # The actual invariant worth checking: the
+        # nebari-realm-admin-credentials secret exists and has a non-empty
+        # password. NIC creates it during foundational-services install
+        # (BEFORE the realm-setup-job even runs), so it's present from the
+        # moment the action returns. The action's extract-outputs.sh polling
+        # captures it into the keycloak-realm-admin-password output.
         env:
           KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
           OUTPUT_VALUE: ${{ steps.sandbox.outputs.keycloak-realm-admin-password }}
         run: |
           set -euo pipefail
-          echo "Output captured by action: $([[ -n "${OUTPUT_VALUE}" ]] && echo "populated (extract-outputs caught it within 30s polling)" || echo "empty (realm-setup ran longer than 30s; consumer falls back to kubectl get secret)")"
-          echo "Waiting for job/keycloak-realm-setup to complete..."
-          kubectl wait --for=condition=complete job/keycloak-realm-setup \
-            -n keycloak --timeout=600s
           SECRET=$(kubectl -n keycloak get secret nebari-realm-admin-credentials \
-            -o jsonpath='{.data.password}' | base64 -d)
+            -o jsonpath='{.data.password}' 2>/dev/null | base64 -d || true)
           if [[ -z "${SECRET}" ]]; then
-            echo "::error::nebari-realm-admin-credentials secret is empty after realm-setup completed"
+            echo "::error::nebari-realm-admin-credentials secret missing or has empty password — NIC foundational install may have failed"
             exit 1
           fi
-          echo "OK: nebari-realm-admin-credentials secret is populated"
+          if [[ -z "${OUTPUT_VALUE}" ]]; then
+            echo "::error::keycloak-realm-admin-password output is empty even though the underlying secret is populated — extract-outputs.sh polling window may need extending"
+            exit 1
+          fi
+          echo "OK: nebari-realm-admin-credentials secret is populated AND captured into the keycloak-realm-admin-password output"
 
       - name: Debug cluster state
         if: failure()

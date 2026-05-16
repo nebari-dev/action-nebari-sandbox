@@ -37,6 +37,18 @@ certificate:
 git_repository:
   url: "file://${GITOPS_DIR}"
   branch: main
+  # Workaround for a misleading NIC WARN ("no valid credentials found for
+  # git repository") that fires on every platform run. NIC's ArgoCD-install
+  # path tries to provision repo credentials unconditionally, including for
+  # file:// URLs where authentication is not meaningful. Without these two
+  # fields, the deploy logs an alarming warning that has nothing to do with
+  # the actual run state. Pointing argocd_auth at a known-placeholder env
+  # var (exported below) satisfies the check; the resulting Secret is
+  # harmless dead weight because ArgoCD's repo-server does not authenticate
+  # file:// reads. Remove once the upstream check is scoped to non-file
+  # schemes.
+  argocd_auth:
+    token_env: NEBARI_SANDBOX_GIT_PLACEHOLDER_TOKEN
 cluster:
   local:
     # NIC's local provider reads kube_context from cluster.local.kube_context
@@ -81,6 +93,11 @@ _nic_start=$(_now_ms)
 # the per-phase NIC breakdown. Tee is a no-op when timing-report is off
 # (file just sits in /tmp). pipefail (set above) preserves nic's exit code.
 _NIC_LOG_FILE="/tmp/nic-deploy-${CLUSTER_NAME}.log"
+# Placeholder credential matching the argocd_auth.token_env in the
+# auto-generated config above. See the comment there for why this exists.
+# Harmless if the consumer supplies their own nic-config that doesn't
+# reference this var: NIC just doesn't read it.
+export NEBARI_SANDBOX_GIT_PLACEHOLDER_TOKEN="placeholder-not-used-for-file-urls"
 nic deploy -f "${CONFIG_FILE}" --timeout 15m 2>&1 | tee "${_NIC_LOG_FILE}"
 if [[ "${NEBARI_TIMING_REPORT:-false}" == "true" ]]; then
   _nic_end=$(_now_ms)
