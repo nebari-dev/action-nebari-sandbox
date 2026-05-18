@@ -45,6 +45,37 @@ inputs:
       working tree. Defaults to `add ${app-name}`.
     required: false
     default: ""
+  wait-for-application:
+    description: >
+      Whether to poll for the consumer Application object to exist after
+      committing the manifest. NIC's root App-of-Apps creates it on its
+      next reconcile; left to its natural polling interval this can be
+      ~3 min. When 'true' (default), the sub-action annotates nebari-root
+      with an ArgoCD refresh request and then polls. Set 'false' for
+      advanced cases (e.g. registering several packs in a row and waiting
+      on all of them at the end).
+    required: false
+    default: "true"
+  wait-healthy:
+    description: >
+      When wait-for-application is 'true', whether to additionally wait
+      for the Application's `status.health.status` to reach `Healthy`
+      after it exists. Most consumers want this, since a created-but-
+      not-Healthy Application is still effectively not deployed. Set
+      'false' if your tests do their own readiness checks downstream and
+      you only need confirmation that the Application is registered. No
+      effect when wait-for-application is 'false'.
+    required: false
+    default: "true"
+  wait-timeout:
+    description: >
+      Maximum time to wait for each phase (exists, Healthy) when waiting
+      is enabled. Accepts the same duration shape as `kubectl wait
+      --timeout` (e.g. '5m', '120s', '1h'). Applied independently per
+      phase, so total worst-case wait is 2x this value when wait-healthy
+      is 'true'.
+    required: false
+    default: "5m"
 
 outputs:
   chart-dest:
@@ -66,3 +97,11 @@ runs:
         CHART_SOURCE: ${{ inputs.chart-source }}
         APPLICATION_MANIFEST: ${{ inputs.application-manifest }}
         COMMIT_MESSAGE: ${{ inputs.commit-message }}
+    - id: wait
+      if: inputs.wait-for-application == 'true'
+      shell: bash
+      run: ${{ github.action_path }}/wait-for-app.sh
+      env:
+        APP_NAME: ${{ inputs.app-name }}
+        WAIT_HEALTHY: ${{ inputs.wait-healthy }}
+        WAIT_TIMEOUT: ${{ inputs.wait-timeout }}

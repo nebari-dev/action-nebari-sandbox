@@ -128,9 +128,10 @@ ${GITOPS_DIR}/
 
 #### Recommended: use the `add-software-pack` sub-action
 
-Wraps the copy → envsubst → commit → chmod ritual into one step. Your
-`application.yaml` can reference `${GITOPS_DIR}` and any other env vars in
-scope at invocation time:
+Wraps the copy → envsubst → commit → chmod ritual into one step, plus a
+built-in wait for the resulting ArgoCD `Application` to reach `Healthy`.
+Your `application.yaml` can reference `${GITOPS_DIR}` and any other env
+vars in scope at invocation time:
 
 ```yaml
 steps:
@@ -141,25 +142,29 @@ steps:
     with:
       profile: platform
 
+  - name: Surface KUBECONFIG for the sub-action's wait
+    run: echo "KUBECONFIG=${{ steps.sandbox.outputs.kubeconfig }}" >> "$GITHUB_ENV"
+
   - uses: nebari-dev/action-nebari-sandbox/add-software-pack@v1
     with:
       gitops-dir:           ${{ steps.sandbox.outputs.gitops-dir }}
       app-name:             my-app
       chart-source:         ./chart
       application-manifest: ./my-app-application.yaml
+      # wait-for-application + wait-healthy default to 'true'; the
+      # sub-action nudges nebari-root for refresh and blocks until the
+      # consumer Application reaches Healthy. Override with 'false' if
+      # you'd rather poll yourself.
 
-  - name: Wait for ArgoCD to reconcile
-    env:
-      KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+  - name: Wait for your workload to be available
     run: |
-      kubectl wait --for=jsonpath='{.status.health.status}=Healthy' \
-        application/my-app -n argocd --timeout=300s
+      # Application/my-app is already Healthy at this point. Whatever
+      # deployment/service the chart creates is what your tests target.
       kubectl wait --for=condition=available deployment/my-app \
         -n default --timeout=120s
 
   - name: Run integration tests
     env:
-      KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
       GATEWAY_IP: ${{ steps.sandbox.outputs.gateway-ip }}
     run: |
       # your tests against the deployed app here
