@@ -95,6 +95,11 @@ jobs:
           profile: platform
           cluster-name: test-add-software-pack
 
+      - name: Surface KUBECONFIG for the sub-action's wait
+        # add-software-pack's wait-for-application step runs `kubectl` and
+        # picks up the ambient ${KUBECONFIG} from $GITHUB_ENV.
+        run: echo "KUBECONFIG=${{ steps.sandbox.outputs.kubeconfig }}" >> "${GITHUB_ENV}"
+
       - uses: ./add-software-pack
         id: register
         with:
@@ -102,6 +107,8 @@ jobs:
           app-name: e2e-test-app
           chart-source: fixture/chart
           application-manifest: fixture/application.yaml
+          # wait-for-application + wait-healthy default to 'true' — by the
+          # time this step returns the Application should already be Healthy.
 
       - name: Verify sub-action outputs
         run: |
@@ -117,21 +124,17 @@ jobs:
           grep -q "file://${{ steps.sandbox.outputs.gitops-dir }}" "${EXPECTED_APP}" \
             || { echo "::error::envsubst did not expand \${GITOPS_DIR}"; cat "${EXPECTED_APP}"; exit 1; }
 
-      - name: Wait for ArgoCD sync
-        env:
-          KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+      - name: Sanity-check Application is Healthy after sub-action returned
+        # The sub-action's wait should already have blocked until Healthy.
+        # This step doesn't poll — it should return immediately. If it
+        # doesn't, the sub-action's wait isn't actually doing what its
+        # docs claim.
         run: |
           set -euo pipefail
-          STATUS="(none)"
-          for i in $(seq 1 60); do
-            STATUS=$(kubectl get application/e2e-test-app -n argocd \
-              -o jsonpath='{.status.health.status}' 2>/dev/null || echo "NotFound")
-            echo "  [${i}/60] status: ${STATUS}"
-            [[ "${STATUS}" == "Healthy" ]] && break
-            sleep 5
-          done
+          STATUS=$(kubectl get application/e2e-test-app -n argocd \
+            -o jsonpath='{.status.health.status}' 2>/dev/null || echo "(none)")
           if [[ "${STATUS}" != "Healthy" ]]; then
-            echo "::error::Application/e2e-test-app did not reach Healthy (last: ${STATUS})"
+            echo "::error::add-software-pack returned but application/e2e-test-app is '${STATUS}', not Healthy"
             kubectl get application/e2e-test-app -n argocd -o yaml || true
             exit 1
           fi
