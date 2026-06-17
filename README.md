@@ -40,7 +40,7 @@ Spin up a bare Kubernetes cluster for quick smoke tests:
 steps:
   - uses: actions/checkout@v6
 
-  - uses: nebari-dev/action-nebari-sandbox@v1
+  - uses: nebari-dev/action-nebari-sandbox@v2
     id: sandbox
     with:
       profile: cluster-only
@@ -65,7 +65,7 @@ Deploy the full Nebari foundational stack for integration testing:
 steps:
   - uses: actions/checkout@v6
 
-  - uses: nebari-dev/action-nebari-sandbox@v1
+  - uses: nebari-dev/action-nebari-sandbox@v2
     id: sandbox
     with:
       profile: platform
@@ -84,9 +84,7 @@ steps:
 
   - name: Cleanup
     if: always()
-    run: |
-      k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
-      docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
+    run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
 ```
 
 > **Note:** by default the `platform` profile downloads NIC's latest pre-built
@@ -118,7 +116,6 @@ ${GITOPS_DIR}/
         gateway-config.yaml
         httproutes.yaml
         keycloak.yaml
-        metallb.yaml
         nebari-landingpage.yaml
         postgresql.yaml
         root.yaml                    (the App-of-Apps itself; excluded from its own watch)
@@ -137,7 +134,7 @@ vars in scope at invocation time:
 steps:
   - uses: actions/checkout@v6
 
-  - uses: nebari-dev/action-nebari-sandbox@v1
+  - uses: nebari-dev/action-nebari-sandbox@v2
     id: sandbox
     with:
       profile: platform
@@ -145,7 +142,7 @@ steps:
   - name: Surface KUBECONFIG for the sub-action's wait
     run: echo "KUBECONFIG=${{ steps.sandbox.outputs.kubeconfig }}" >> "$GITHUB_ENV"
 
-  - uses: nebari-dev/action-nebari-sandbox/add-software-pack@v1
+  - uses: nebari-dev/action-nebari-sandbox/add-software-pack@v2
     with:
       gitops-dir:           ${{ steps.sandbox.outputs.gitops-dir }}
       app-name:             my-app
@@ -171,9 +168,7 @@ steps:
 
   - name: Cleanup
     if: always()
-    run: |
-      k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
-      docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
+    run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
 ```
 
 A minimal `application.yaml` modeled on the foundational landing-page App
@@ -255,15 +250,12 @@ what the action actually provisioned — see the input docs for details:
       url: "file:///tmp/nebari-gitops-my-cluster"
       branch: main
     cluster:
-      local:
-        kube_context: "k3d-my-cluster"
-        node_selectors:
-          general: { kubernetes.io/os: linux }
-          user:    { kubernetes.io/os: linux }
-          worker:  { kubernetes.io/os: linux }
+      existing:
+        context: "k3d-my-cluster"
+        storage_class: local-path
     EOF
 
-- uses: nebari-dev/action-nebari-sandbox@v1
+- uses: nebari-dev/action-nebari-sandbox@v2
   with:
     profile: platform
     cluster-name: my-cluster
@@ -292,7 +284,7 @@ what the action actually provisioned — see the input docs for details:
 | `resource-summary` | <p>When 'true' (and profile is 'platform'), append a markdown table of pod resource requests/limits and node allocatable capacity to $GITHUB<em>STEP</em>SUMMARY after the platform stack is up. Useful for tracking minimum-spec requirements as the foundational stack evolves.</p> | `false` | `false` |
 | `timing-report` | <p>When 'true', record wall-clock durations for key phases (k3s image pull, k3d cluster create, nic deploy, etc.) and append a markdown timing table to $GITHUB<em>STEP</em>SUMMARY. Works with both profiles. Intended for benchmarking and profiling CI runs; has no effect on normal operation when 'false'.</p> | `false` | `false` |
 | `nic-version` | <p>NIC version to install (platform profile only). - 'latest' (default): downloads the latest released pre-built binary. - 'vX.Y.Z': downloads a specific release's pre-built binary. - '.': builds from $GITHUB_WORKSPACE (use when the consumer has the   NIC repo checked out, e.g. NIC's own self-tests).</p> <ul> <li>Any other string (branch name, tag, commit sha): clones that ref and builds from source. Requires Go in the consumer's workflow (add actions/setup-go before this action).</li> </ul> | `false` | `latest` |
-| `nic-config` | <p>Path to a consumer-supplied NIC config file (platform profile only). When set, the action skips its built-in config template and passes this file to <code>nic deploy -f</code> directly. The consumer is responsible for matching the rest of the action's setup — two fields in particular must point at what the action actually provisioned:</p> <ul> <li><code>cluster.local.kube_context</code> — derived as <code>k3d-&lt;cluster-name&gt;</code> (e.g. <code>k3d-nebari-test</code> for the default cluster-name).</li> <li><code>git_repository.url</code> — derived as <code>file:///tmp/nebari-gitops-&lt;cluster-name&gt;</code> (a hostPath mount into the k3d node so ArgoCD's repo-server can read it).</li> </ul> <p>The action does not validate these; NIC's config parser will surface real mismatches at deploy time. When unset (default), the action generates its standard config as before.</p> | `false` | `""` |
+| `nic-config` | <p>Path to a consumer-supplied NIC config file (platform profile only). When set, the action skips its built-in config template and passes this file to <code>nic deploy -f</code> directly. The consumer is responsible for matching the rest of the action's setup — two fields in particular must point at what the action actually provisioned:</p> <ul> <li><code>cluster.existing.context</code> — derived as <code>k3d-&lt;cluster-name&gt;</code> (e.g. <code>k3d-nebari-test</code> for the default cluster-name). The action provisions the k3d cluster itself, so NIC connects to it via the <code>existing</code> provider rather than provisioning one.</li> <li><code>git_repository.url</code> — derived as <code>file:///tmp/nebari-gitops-&lt;cluster-name&gt;</code> (a hostPath mount into the k3d node so ArgoCD's repo-server can read it).</li> </ul> <p>The action does not validate these; NIC's config parser will surface real mismatches at deploy time. When unset (default), the action generates its standard config as before.</p> | `false` | `""` |
 <!-- action-docs-inputs action="action.yml" -->
 
 <!-- action-docs-outputs action="action.yml" -->
@@ -302,12 +294,11 @@ what the action actually provisioned — see the input docs for details:
 | --- | --- |
 | `kubeconfig` | <p>Path to the kubeconfig file for the created cluster</p> |
 | `cluster-name` | <p>Name of the created k3d cluster</p> |
-| `network-name` | <p>Docker network created for the cluster (platform profile only). Use this in cleanup steps.</p> |
 | `gitops-dir` | <p>Local GitOps directory mounted into the cluster (platform profile only)</p> |
 | `keycloak-admin-password` | <p>Keycloak admin password for the <em>master</em> realm (platform profile only). Use <code>keycloak-realm-admin-password</code> for the nebari realm.</p> |
 | `keycloak-realm-admin-password` | <p>Keycloak admin password for the <em>nebari</em> realm (platform profile only). Provisioned asynchronously by NIC's realm-setup PostSync hook after Keycloak becomes Ready, so this output may be empty if the secret has not materialized by the time <code>extract-outputs.sh</code> polls (see #27 for the planned wait-for-realm input). When empty, consumers can fall back to reading the <code>nebari-realm-admin-credentials</code> secret in the <code>keycloak</code> namespace after their own wait-for-realm step.</p> |
 | `argocd-admin-password` | <p>ArgoCD admin password (platform profile only)</p> |
-| `gateway-ip` | <p>MetalLB gateway IP address (platform profile only)</p> |
+| `gateway-ip` | <p>Gateway LoadBalancer IP (platform profile only), assigned by k3d's servicelb (klipper).</p> |
 | `keycloak-issuer-url` | <p>External public issuer URL for the Keycloak deployment (platform profile only), e.g. <code>https://keycloak.nebari.local</code>. Derived from the <code>domain</code> field in the NIC config NIC wrote to the gitops repo, matching NIC's own formula. Useful for JWT <code>iss</code> claim validation in consumer e2e tests.</p> |
 <!-- action-docs-outputs action="action.yml" -->
 
@@ -321,12 +312,10 @@ The action does not automatically delete the cluster. Add a cleanup step to your
   if: always()
   run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
 
-# platform (also removes the Docker network)
+# platform
 - name: Cleanup
   if: always()
-  run: |
-    k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
-    docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
+  run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
 ```
 
 ## Requirements

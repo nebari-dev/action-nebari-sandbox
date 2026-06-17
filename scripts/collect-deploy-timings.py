@@ -57,8 +57,9 @@ _UNIT_TO_MS = {"ms": 1, "s": 1000, "m": 60_000}
 # them. The ArgoCD-side cost shows up in the per-Application sync table.
 #
 # We deliberately do NOT pair "Starting deployment" → "Deployment completed
-# successfully" for an end-to-end NIC duration: the latter `msg` fires for
-# the local provider stub partway through, not at the end of `nic deploy`.
+# successfully" for an end-to-end NIC duration: the latter `msg` fires when the
+# provider's infra step returns (a near no-op for the `existing` provider),
+# partway through `nic deploy`, not at the end.
 # The wall-clock total is already captured separately as `nic deploy (total)`.
 _NIC_PHASE_PAIRS: list[tuple[str, str, str]] = [
     ("Initializing local GitOps directory",

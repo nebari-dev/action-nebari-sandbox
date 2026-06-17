@@ -46,15 +46,9 @@ jobs:
             url: "file:///tmp/nebari-gitops-test-nic-config"
             branch: main
           cluster:
-            local:
-              kube_context: "k3d-test-nic-config"
-              node_selectors:
-                general:
-                  kubernetes.io/os: linux
-                user:
-                  kubernetes.io/os: linux
-                worker:
-                  kubernetes.io/os: linux
+            existing:
+              context: "k3d-test-nic-config"
+              storage_class: local-path
           EOF
           echo "--- consumer config ---"
           cat /tmp/my-nic-config.yaml
@@ -104,6 +98,3 @@ jobs:
         if: always()
         run: |
           k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }} 2>/dev/null || true
-          if [[ -n "${{ steps.sandbox.outputs.network-name }}" ]]; then
-            docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
-          fi

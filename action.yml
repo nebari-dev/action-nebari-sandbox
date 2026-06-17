@@ -59,8 +59,10 @@ inputs:
       for matching the rest of the action's setup — two fields in
       particular must point at what the action actually provisioned:
 
-        - `cluster.local.kube_context` — derived as `k3d-<cluster-name>`
-          (e.g. `k3d-nebari-test` for the default cluster-name).
+        - `cluster.existing.context` — derived as `k3d-<cluster-name>`
+          (e.g. `k3d-nebari-test` for the default cluster-name). The action
+          provisions the k3d cluster itself, so NIC connects to it via the
+          `existing` provider rather than provisioning one.
         - `git_repository.url` — derived as
           `file:///tmp/nebari-gitops-<cluster-name>` (a hostPath mount
           into the k3d node so ArgoCD's repo-server can read it).
@@ -78,9 +80,6 @@ outputs:
   cluster-name:
     description: "Name of the created k3d cluster"
     value: ${{ steps.create-cluster.outputs.cluster-name }}
-  network-name:
-    description: "Docker network created for the cluster (platform profile only). Use this in cleanup steps."
-    value: ${{ steps.create-cluster.outputs.network-name }}
   gitops-dir:
     description: "Local GitOps directory mounted into the cluster (platform profile only)"
     value: ${{ steps.create-cluster.outputs.gitops-dir }}
@@ -101,7 +100,7 @@ outputs:
     description: "ArgoCD admin password (platform profile only)"
     value: ${{ steps.extract-outputs.outputs.argocd-admin-password }}
   gateway-ip:
-    description: "MetalLB gateway IP address (platform profile only)"
+    description: "Gateway LoadBalancer IP (platform profile only), assigned by k3d's servicelb (klipper)."
     value: ${{ steps.extract-outputs.outputs.gateway-ip }}
   keycloak-issuer-url:
     description: >
