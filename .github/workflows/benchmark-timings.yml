@@ -82,7 +82,7 @@ jobs:
           echo "$duration" > "artifacts/cluster-only-${{ matrix.sample }}.txt"
           echo "cluster-only sample ${{ matrix.sample }}: ${duration}s"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: timing-cluster-only-${{ matrix.sample }}
           path: artifacts/
@@ -121,7 +121,7 @@ jobs:
           echo "$duration" > "artifacts/platform-${{ matrix.sample }}.txt"
           echo "platform sample ${{ matrix.sample }}: ${duration}s"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: timing-platform-${{ matrix.sample }}
           path: artifacts/
@@ -138,7 +138,7 @@ jobs:
     if: always() && !cancelled() && (needs.cluster-only.result != 'failure' && needs.platform.result != 'failure')
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           pattern: timing-*
           merge-multiple: true
