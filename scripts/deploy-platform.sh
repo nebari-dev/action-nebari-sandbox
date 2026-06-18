@@ -15,7 +15,7 @@ _record_timing() {          # label start_ms end_ms
 # If the consumer supplied a NIC config path, pass it straight through to
 # `nic deploy -f`. Otherwise generate the default at /tmp/nic-config-*.yaml.
 # Consumer-supplied configs are the consumer's responsibility — if they
-# override fields like `cluster.local.kube_context` or
+# override fields like `cluster.existing.context` or
 # `git_repository.url`, they must match what the action provisioned.
 if [[ -n "${NIC_CONFIG:-}" ]]; then
   if [[ ! -f "${NIC_CONFIG}" ]]; then
@@ -50,18 +50,16 @@ git_repository:
   argocd_auth:
     token_env: NEBARI_SANDBOX_GIT_PLACEHOLDER_TOKEN
 cluster:
-  local:
-    # NIC's local provider reads kube_context from cluster.local.kube_context
-    # (not the top-level NebariConfig.kube_context, which is for "bring your
-    # own cluster" mode that skips infra provisioning).
-    kube_context: "k3d-${CLUSTER_NAME}"
-    node_selectors:
-      general:
-        kubernetes.io/os: linux
-      user:
-        kubernetes.io/os: linux
-      worker:
-        kubernetes.io/os: linux
+  existing:
+    # The action provisions the k3d cluster itself, so NIC connects to it as a
+    # pre-existing cluster (the `existing` provider) rather than creating one.
+    # `context` is the k3d-merged kubeconfig context; the kubeconfig path falls
+    # back to KUBECONFIG/~/.kube/config, which create-cluster.sh merged into.
+    context: "k3d-${CLUSTER_NAME}"
+    # k3s ships only the "local-path" StorageClass; point NIC at it directly.
+    # The `existing` provider exposes storage_class (the `local` provider did
+    # not), so no "standard" StorageClass shim is needed anymore.
+    storage_class: local-path
 EOF
   echo "Config written to ${CONFIG_FILE}:"
   cat "${CONFIG_FILE}"

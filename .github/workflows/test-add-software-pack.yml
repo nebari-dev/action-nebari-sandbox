@@ -153,6 +153,3 @@ jobs:
         if: always()
         run: |
           k3d cluster delete ${{ steps.sandbox.outputs.cluster-name || 'test-add-software-pack' }} 2>/dev/null || true
-          if [[ -n "${{ steps.sandbox.outputs.network-name }}" ]]; then
-            docker network rm ${{ steps.sandbox.outputs.network-name }} 2>/dev/null || true
-          fi

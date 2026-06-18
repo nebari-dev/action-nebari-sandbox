@@ -7,12 +7,11 @@ set -euo pipefail
 TIMEOUT="${AWAIT_TIMEOUT:-300}"
 
 # Namespace order follows dependency: ArgoCD first (it drives the rest),
-# then infra (MetalLB, cert-manager, Envoy), then workloads (Keycloak).
-# max_restarts is namespace-specific: MetalLB speaker may restart a few times
-# while waiting for the metallb-memberlist Secret that ArgoCD syncs separately.
+# then infra (cert-manager, Envoy), then workloads (Keycloak). MetalLB is no
+# longer in the list — under the `existing` provider NIC doesn't deploy it;
+# k3d's built-in servicelb (klipper) provides LoadBalancer IPs instead.
 declare -A MAX_RESTARTS=(
   [argocd]=3
-  [metallb-system]=10
   [cert-manager]=3
   [envoy-gateway-system]=3
   [keycloak]=5
@@ -21,7 +20,7 @@ declare -A MAX_RESTARTS=(
 overall_ok=true
 total=0
 
-for ns in argocd metallb-system cert-manager envoy-gateway-system keycloak; do
+for ns in argocd cert-manager envoy-gateway-system keycloak; do
   max_r="${MAX_RESTARTS[$ns]}"
   echo "::group::  $ns  (timeout: ${TIMEOUT}s  max-restarts: ${max_r})"
 
@@ -71,4 +70,4 @@ if [[ "$overall_ok" != "true" ]]; then
   exit 1
 fi
 
-echo "All platform workloads ready — ${total} resources across 5 namespaces."
+echo "All platform workloads ready — ${total} resources across 4 namespaces."

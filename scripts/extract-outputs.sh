@@ -28,9 +28,10 @@ done
 ARGOCD_PASS="$(kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)" || true
 
-# Gateway IP from MetalLB. Scoped to envoy-gateway-system, where NIC's Envoy
-# Gateway controller creates the LoadBalancer service for the Nebari Gateway.
-# Avoids picking up unrelated LoadBalancer services elsewhere in the cluster.
+# Gateway IP from k3d's servicelb (klipper). Scoped to envoy-gateway-system,
+# where NIC's Envoy Gateway controller creates the LoadBalancer service for the
+# Nebari Gateway. klipper populates status.loadBalancer.ingress[0].ip with the
+# k3d node IP. Avoids picking up unrelated LoadBalancer services elsewhere.
 GATEWAY_IP=""
 for i in $(seq 1 12); do
   GATEWAY_IP="$(kubectl get svc -n envoy-gateway-system \
@@ -46,7 +47,7 @@ done
 # Keycloak external issuer URL. Derived from the domain in the NIC config
 # NIC wrote to the gitops repo, matching NIC's own formula
 # (pkg/argocd/writer.go: `https://keycloak.<domain><KeycloakBasePath>`,
-# where KeycloakBasePath is empty for the local provider).
+# where KeycloakBasePath is empty for the existing provider).
 KEYCLOAK_ISSUER_URL=""
 if [[ -n "${GITOPS_DIR:-}" && -f "${GITOPS_DIR}/nic-config.yaml" ]]; then
   DOMAIN="$(awk '/^domain:/ {gsub(/["'"'"']/, "", $2); print $2; exit}' \
