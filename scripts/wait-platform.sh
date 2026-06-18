@@ -6,6 +6,16 @@ set -euo pipefail
 
 TIMEOUT="${AWAIT_TIMEOUT:-300}"
 
+# Keycloak (KeycloakX, JVM) is the slowest foundational workload to boot and is
+# resource-marginal on the default GitHub runner (4 vCPU / 16 GB, shared with
+# k3d and the rest of the stack), so it intermittently misses the shared 300s
+# readiness wall while everything else is ready (#67). Give it more headroom by
+# default. The proper fix — right-sizing Keycloak's chart resources — lives
+# upstream in NIC; this keeps the readiness gate from flaking while that lands.
+# Never wait less for Keycloak than the base timeout.
+KEYCLOAK_TIMEOUT="${KEYCLOAK_AWAIT_TIMEOUT:-600}"
+(( KEYCLOAK_TIMEOUT < TIMEOUT )) && KEYCLOAK_TIMEOUT="${TIMEOUT}"
+
 # Namespace order follows dependency: ArgoCD first (it drives the rest),
 # then infra (cert-manager, Envoy), then workloads (Keycloak). MetalLB is no
 # longer in the list — under the `existing` provider NIC doesn't deploy it;
@@ -17,12 +27,21 @@ declare -A MAX_RESTARTS=(
   [keycloak]=5
 )
 
+# Per-namespace readiness timeout. All share the base except Keycloak (above).
+declare -A NS_TIMEOUT=(
+  [argocd]="${TIMEOUT}"
+  [cert-manager]="${TIMEOUT}"
+  [envoy-gateway-system]="${TIMEOUT}"
+  [keycloak]="${KEYCLOAK_TIMEOUT}"
+)
+
 overall_ok=true
 total=0
 
 for ns in argocd cert-manager envoy-gateway-system keycloak; do
   max_r="${MAX_RESTARTS[$ns]}"
-  echo "::group::  $ns  (timeout: ${TIMEOUT}s  max-restarts: ${max_r})"
+  ns_timeout="${NS_TIMEOUT[$ns]}"
+  echo "::group::  $ns  (timeout: ${ns_timeout}s  max-restarts: ${max_r})"
 
   ns_count=0
   for kind in deployment daemonset statefulset; do
@@ -31,7 +50,7 @@ for ns in argocd cert-manager envoy-gateway-system keycloak; do
     for name in $names; do
       printf '  %-12s  %s/%s\n' "waiting..." "$kind" "$name"
       if kubectl rollout status "$kind/$name" -n "$ns" \
-          --timeout="${TIMEOUT}s" 2>&1 | sed 's/^/    /'; then
+          --timeout="${ns_timeout}s" 2>&1 | sed 's/^/    /'; then
         printf '  %-12s  %s/%s\n' "ready" "$kind" "$name"
         (( ns_count++ )) || true
         (( total++ )) || true
