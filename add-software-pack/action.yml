@@ -70,10 +70,11 @@ inputs:
   wait-timeout:
     description: >
       Maximum time to wait for each phase (exists, Healthy) when waiting
-      is enabled. Accepts the same duration shape as `kubectl wait
-      --timeout` (e.g. '5m', '120s', '1h'). Applied independently per
-      phase, so total worst-case wait is 2x this value when wait-healthy
-      is 'true'.
+      is enabled. Use a simple duration of '<number><unit>' where unit is
+      s, m, or h (e.g. '5m', '120s', '1h'); a bare number is accepted and
+      treated as seconds ('300' == '300s'). Compound forms like '1h30m'
+      are not supported. Applied independently per phase, so total
+      worst-case wait is 2x this value when wait-healthy is 'true'.
     required: false
     default: "5m"
 

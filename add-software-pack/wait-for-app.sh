@@ -12,6 +12,22 @@ set -euo pipefail
 WAIT_HEALTHY="${WAIT_HEALTHY:-true}"
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-5m}"
 
+# Normalize WAIT_TIMEOUT once so both wait phases agree on it. The exists phase
+# parses it into integer seconds and is lenient (a bare number is treated as
+# seconds), but the Healthy phase hands it straight to `kubectl wait --timeout`,
+# which is strict and rejects a unit-less value ("missing unit in duration").
+# That mismatch let `300` pass phase 1 and then hard-fail phase 2, where the
+# rejected argument was surfaced as a misleading "did not reach Healthy" timeout
+# (#64). Append `s` to a bare number, then validate the shape up front and fail
+# fast with the real reason rather than letting `kubectl wait` mis-report it.
+if [[ "${WAIT_TIMEOUT}" =~ ^[0-9]+$ ]]; then
+  WAIT_TIMEOUT="${WAIT_TIMEOUT}s"
+fi
+if [[ ! "${WAIT_TIMEOUT}" =~ ^[0-9]+(s|m|h)$ ]]; then
+  echo "::error::wait-timeout must be a kubectl-style duration like 300s, 5m, or 1h (got '${WAIT_TIMEOUT}')."
+  exit 1
+fi
+
 echo "::group::Wait for Application/${APP_NAME}"
 
 # Nudge nebari-root to reconcile now rather than at its next natural polling

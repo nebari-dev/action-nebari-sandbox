@@ -109,6 +109,10 @@ jobs:
           application-manifest: fixture/application.yaml
           # wait-for-application + wait-healthy default to 'true' — by the
           # time this step returns the Application should already be Healthy.
+          # A deliberately unit-less timeout exercises the normalization from
+          # #64: before the fix, `300` hard-failed the Healthy phase with a
+          # misleading "did not reach Healthy" error; now it is treated as 300s.
+          wait-timeout: "300"
 
       - name: Verify sub-action outputs
         run: |
