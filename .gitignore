@@ -1,0 +1,13 @@
+# Local scratch artifacts produced by the scripts when run outside CI
+# (resource-summary.py / timing-report.py write to $GITHUB_STEP_SUMMARY in CI,
+# but fall back to stdout locally — people often redirect that to a file).
+_summary_raw.md
+*.summary.md
+nebari-timing-*.tsv
+nic-deploy-*.log
+
+# Editor / OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/
