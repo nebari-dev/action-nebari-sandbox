@@ -112,11 +112,15 @@ reusing one means deliberately *replacing* that Application:
 ${GITOPS_DIR}/
     apps/                            (root App-of-Apps watches this directory)
         cert-manager.yaml
+        certificates.yaml
         cluster-issuers.yaml
+        envoy-gateway.yaml
         gateway-config.yaml
         httproutes.yaml
         keycloak.yaml
         nebari-landingpage.yaml
+        nebari-operator.yaml
+        opentelemetry-collector.yaml
         postgresql.yaml
         root.yaml                    (the App-of-Apps itself; excluded from its own watch)
     manifests/                       (raw manifests referenced by foundational Apps)
