@@ -38,16 +38,27 @@ declare -A NS_TIMEOUT=(
 overall_ok=true
 total=0
 
+# Preflight: make sure we can actually reach the cluster. Without this, a wrong
+# KUBECONFIG/context (or a cluster that never came up) makes every `kubectl get`
+# below error out, get swallowed, and report "0 resources" — which used to pass
+# vacuously. Fail loudly and distinctly here instead.
+if ! kubectl get nodes --request-timeout=20s >/dev/null 2>&1; then
+  echo "::error::Cannot reach the cluster (kubectl get nodes failed). Check KUBECONFIG/context; the platform deploy may have failed before this step."
+  exit 1
+fi
+
 for ns in argocd cert-manager envoy-gateway-system keycloak; do
   max_r="${MAX_RESTARTS[$ns]}"
   ns_timeout="${NS_TIMEOUT[$ns]}"
   echo "::group::  $ns  (timeout: ${ns_timeout}s  max-restarts: ${max_r})"
 
   ns_count=0
+  found_any=false
   for kind in deployment daemonset statefulset; do
     names=$(kubectl get "$kind" -n "$ns" --no-headers \
       -o custom-columns=':metadata.name' 2>/dev/null || true)
     for name in $names; do
+      found_any=true
       printf '  %-12s  %s/%s\n' "waiting..." "$kind" "$name"
       if kubectl rollout status "$kind/$name" -n "$ns" \
           --timeout="${ns_timeout}s" 2>&1 | sed 's/^/    /'; then
@@ -60,6 +71,19 @@ for ns in argocd cert-manager envoy-gateway-system keycloak; do
       fi
     done
   done
+
+  # Every foundational namespace is expected to have at least one rollout
+  # resource (Deployment/DaemonSet/StatefulSet). Finding none means the
+  # namespace is missing or NIC never installed its workloads — a failed deploy,
+  # not "nothing to wait for". Treat it as a failure so the gate can't pass on
+  # an empty cluster.
+  if [[ "${found_any}" != "true" ]]; then
+    echo "  no deployment/daemonset/statefulset found in ${ns}"
+    if ! kubectl get namespace "$ns" >/dev/null 2>&1; then
+      echo "  (namespace ${ns} does not exist)"
+    fi
+    overall_ok=false
+  fi
 
   # Restart count guard
   exceeded=$(
@@ -85,7 +109,7 @@ for pod in data['items']:
 done
 
 if [[ "$overall_ok" != "true" ]]; then
-  echo "::error::One or more platform workloads failed to become ready."
+  echo "::error::One or more platform workloads failed to become ready (or were never installed)."
   exit 1
 fi
 
