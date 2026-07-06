@@ -47,6 +47,37 @@ jobs:
           kubectl wait --for=condition=Available deployment/nginx --timeout=60s
           kubectl delete deployment nginx
 
+      - name: wait-platform must fail on an empty / unreachable cluster (#71)
+        # Negative-path guard for the readiness gate. This bare cluster-only
+        # cluster has none of the foundational namespaces, so wait-platform.sh
+        # must FAIL rather than pass vacuously on "0 resources ready". Pins the
+        # regression that motivated the preflight + per-namespace checks.
+        env:
+          KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+          AWAIT_TIMEOUT: "30"
+        run: |
+          set -euo pipefail
+          # Empty cluster: reachable (preflight passes) but no foundational
+          # namespaces -> must fail via the per-namespace check. Pin the message
+          # so this branch can't pass on some unrelated failure.
+          out="$(bash scripts/wait-platform.sh 2>&1)" && rc=0 || rc=$?
+          if (( rc == 0 )); then
+            echo "::error::wait-platform.sh passed on a cluster with no platform workloads"; echo "${out}"; exit 1
+          fi
+          grep -q "no deployment/daemonset/statefulset found" <<<"${out}" \
+            || { echo "::error::empty-cluster failure was not the per-namespace check:"; echo "${out}"; exit 1; }
+          echo "OK: empty cluster failed via the per-namespace check"
+          # Unreachable cluster: the preflight must be what catches it. Asserting
+          # the preflight message (not just a non-zero exit) means a regressed
+          # preflight fails here instead of silently passing via the per-ns path.
+          out="$(KUBECONFIG=/dev/null bash scripts/wait-platform.sh 2>&1)" && rc=0 || rc=$?
+          if (( rc == 0 )); then
+            echo "::error::wait-platform.sh passed with an unreachable cluster"; echo "${out}"; exit 1
+          fi
+          grep -q "Cannot reach the cluster" <<<"${out}" \
+            || { echo "::error::unreachable-cluster failure was not caught by the preflight:"; echo "${out}"; exit 1; }
+          echo "OK: unreachable cluster failed via the preflight"
+
       - name: Cleanup
         if: always()
         run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
@@ -115,6 +146,25 @@ jobs:
             exit 1
           fi
           echo "OK: nebari-realm-admin-credentials secret is populated AND captured into the keycloak-realm-admin-password output"
+
+      - name: Verify remaining platform outputs are populated
+        # extract-outputs.sh writes every output unconditionally, so a missing
+        # secret or LB IP yields an empty output and a green step. Assert the
+        # three that weren't already checked above so a silent-empty output
+        # fails the suite. Passed via env (not inline) to avoid quoting issues.
+        env:
+          GATEWAY_IP: ${{ steps.sandbox.outputs.gateway-ip }}
+          KEYCLOAK_ADMIN_PASSWORD: ${{ steps.sandbox.outputs.keycloak-admin-password }}
+          ARGOCD_ADMIN_PASSWORD: ${{ steps.sandbox.outputs.argocd-admin-password }}
+        run: |
+          set -euo pipefail
+          [[ "${GATEWAY_IP}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "::error::gateway-ip is empty or not an IPv4 address: '${GATEWAY_IP}'"; exit 1; }
+          [[ -n "${KEYCLOAK_ADMIN_PASSWORD}" ]] \
+            || { echo "::error::keycloak-admin-password output is empty"; exit 1; }
+          [[ -n "${ARGOCD_ADMIN_PASSWORD}" ]] \
+            || { echo "::error::argocd-admin-password output is empty"; exit 1; }
+          echo "OK: gateway-ip=${GATEWAY_IP}; keycloak-admin-password and argocd-admin-password are populated"
 
       - name: Debug cluster state
         if: failure()
