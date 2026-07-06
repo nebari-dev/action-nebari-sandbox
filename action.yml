@@ -205,7 +205,7 @@ runs:
       shell: bash
       run: ${{ github.action_path }}/scripts/publish-ca.sh
       env:
-        GITOPS_DIR: ${{ steps.create-cluster.outputs.gitops-dir }}
+        CLUSTER_NAME: ${{ inputs.cluster-name }}
 
     - name: Collect deploy-phase timings
       if: inputs.profile == 'platform' && inputs.timing-report == 'true'

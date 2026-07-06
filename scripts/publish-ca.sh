@@ -15,12 +15,15 @@
 
 set -euo pipefail
 
-GITOPS_DIR="${GITOPS_DIR:-}"
 # Default gateway TLS secret + namespace NIC uses (pkg/config: nebari-gateway-tls;
 # the Certificate lives in envoy-gateway-system).
 SECRET_NS="${GATEWAY_TLS_NAMESPACE:-envoy-gateway-system}"
 SECRET_NAME="${GATEWAY_TLS_SECRET:-nebari-gateway-tls}"
-CA_PATH="${GITOPS_DIR:-/tmp}/sandbox-ca.crt"
+# Write to a runner temp dir, NOT into GITOPS_DIR: that's the ArgoCD file://
+# working tree, and the documented consumer ritual (git -C "$GITOPS_DIR" add -A)
+# plus the add-software-pack sub-action would otherwise sweep this action-internal
+# cert into a consumer commit.
+CA_PATH="${RUNNER_TEMP:-/tmp}/sandbox-ca-${CLUSTER_NAME:-nebari}.crt"
 
 echo "::group::Publish sandbox gateway CA"
 
@@ -58,7 +61,7 @@ echo "ca-cert-path=${CA_PATH}" >> "${GITHUB_OUTPUT}"
 # subjects — the conventional home for cluster-wide info.
 kubectl -n kube-public create configmap nebari-sandbox-ca \
   --from-file=ca.crt="${CA_PATH}" \
-  --dry-run=client -o yaml | kubectl apply -f -
+  --dry-run=client -o yaml | kubectl -n kube-public apply -f -
 echo "Published ConfigMap kube-public/nebari-sandbox-ca (key ca.crt)."
 echo "  Consumers: kubectl get configmap nebari-sandbox-ca -n kube-public -o jsonpath='{.data.ca\.crt}'"
 echo "  then mount it and set SSL_CERT_FILE / REQUESTS_CA_BUNDLE / NODE_EXTRA_CA_CERTS."
