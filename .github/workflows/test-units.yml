@@ -1,0 +1,28 @@
+name: Unit tests
+
+# Fast, cluster-less tests for script logic and input validation. Runs on every
+# PR that touches the scripts or the tests, so validation regressions are caught
+# in seconds instead of only during the ~10-minute platform bootstrap.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'add-software-pack/**'
+      - 'tests/unit/**'
+      - 'tests/run-unit.sh'
+      - '.github/workflows/test-units.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Offline unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run unit tests
+        run: bash tests/run-unit.sh
