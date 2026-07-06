@@ -72,6 +72,17 @@ inputs:
       generates its standard config as before.
     required: false
     default: ""
+  in-cluster-dns:
+    description: >
+      When 'true' (default) and profile is 'platform', add a CoreDNS entry so
+      the external Nebari hostnames (`*.<domain>`, e.g. `keycloak.nebari.local`)
+      resolve to the gateway from INSIDE the cluster. Required for consumer pods
+      doing server-side OIDC: Keycloak's discovery document advertises the
+      external issuer, so a pod must reach that same hostname (see #69). Only
+      `keycloak.<domain>`, `argocd.<domain>`, and `<domain>` have valid TLS SANs.
+      Set 'false' if you manage in-cluster DNS yourself.
+    required: false
+    default: "true"
 
 outputs:
   kubeconfig:
@@ -109,6 +120,22 @@ outputs:
       field in the NIC config NIC wrote to the gitops repo, matching NIC's own
       formula. Useful for JWT `iss` claim validation in consumer e2e tests.
     value: ${{ steps.extract-outputs.outputs.keycloak-issuer-url }}
+  domain:
+    description: >
+      The Nebari domain the platform was deployed with (platform profile only),
+      e.g. `nebari.local`. Read from the NIC config in the gitops repo. Handy
+      for building the hostnames consumers route to (`keycloak.<domain>`, etc.).
+    value: ${{ steps.extract-outputs.outputs.domain }}
+  ca-cert-path:
+    description: >
+      Path on the runner to the sandbox gateway's CA certificate (platform
+      profile only), extracted from the `nebari-gateway-tls` secret. Use it for
+      runner-side `curl --cacert`, or to build a ConfigMap/Secret your pods
+      mount so they trust `https://<domain>` (the gateway serves a selfsigned
+      cert). The same CA is published in-cluster as ConfigMap
+      `nebari-sandbox-ca` (key `ca.crt`) in the `kube-public` namespace. Empty
+      if the gateway TLS secret could not be read (see #69).
+    value: ${{ steps.publish-ca.outputs.ca-cert-path }}
 
 runs:
   using: "composite"
@@ -157,12 +184,28 @@ runs:
       env:
         GITOPS_DIR: ${{ steps.create-cluster.outputs.gitops-dir }}
 
+    - name: Set up in-cluster DNS
+      if: inputs.profile == 'platform' && inputs.in-cluster-dns == 'true'
+      shell: bash
+      run: ${{ github.action_path }}/scripts/setup-in-cluster-dns.sh
+      env:
+        DOMAIN: ${{ steps.extract-outputs.outputs.domain }}
+        GATEWAY_IP: ${{ steps.extract-outputs.outputs.gateway-ip }}
+
     - name: Await platform workloads
       if: inputs.profile == 'platform'
       shell: bash
       run: ${{ github.action_path }}/scripts/wait-platform.sh
       env:
         AWAIT_TIMEOUT: "300"
+
+    - name: Publish sandbox CA
+      if: inputs.profile == 'platform'
+      id: publish-ca
+      shell: bash
+      run: ${{ github.action_path }}/scripts/publish-ca.sh
+      env:
+        GITOPS_DIR: ${{ steps.create-cluster.outputs.gitops-dir }}
 
     - name: Collect deploy-phase timings
       if: inputs.profile == 'platform' && inputs.timing-report == 'true'
