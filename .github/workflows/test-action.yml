@@ -57,16 +57,26 @@ jobs:
           AWAIT_TIMEOUT: "30"
         run: |
           set -euo pipefail
-          if bash scripts/wait-platform.sh; then
-            echo "::error::wait-platform.sh passed on a cluster with no platform workloads"
-            exit 1
+          # Empty cluster: reachable (preflight passes) but no foundational
+          # namespaces -> must fail via the per-namespace check. Pin the message
+          # so this branch can't pass on some unrelated failure.
+          out="$(bash scripts/wait-platform.sh 2>&1)" && rc=0 || rc=$?
+          if (( rc == 0 )); then
+            echo "::error::wait-platform.sh passed on a cluster with no platform workloads"; echo "${out}"; exit 1
           fi
-          echo "OK: wait-platform.sh correctly failed on an empty cluster"
-          if KUBECONFIG=/dev/null bash scripts/wait-platform.sh; then
-            echo "::error::wait-platform.sh passed with an unreachable cluster (preflight did not catch it)"
-            exit 1
+          grep -q "no deployment/daemonset/statefulset found" <<<"${out}" \
+            || { echo "::error::empty-cluster failure was not the per-namespace check:"; echo "${out}"; exit 1; }
+          echo "OK: empty cluster failed via the per-namespace check"
+          # Unreachable cluster: the preflight must be what catches it. Asserting
+          # the preflight message (not just a non-zero exit) means a regressed
+          # preflight fails here instead of silently passing via the per-ns path.
+          out="$(KUBECONFIG=/dev/null bash scripts/wait-platform.sh 2>&1)" && rc=0 || rc=$?
+          if (( rc == 0 )); then
+            echo "::error::wait-platform.sh passed with an unreachable cluster"; echo "${out}"; exit 1
           fi
-          echo "OK: wait-platform.sh correctly failed on an unreachable cluster"
+          grep -q "Cannot reach the cluster" <<<"${out}" \
+            || { echo "::error::unreachable-cluster failure was not caught by the preflight:"; echo "${out}"; exit 1; }
+          echo "OK: unreachable cluster failed via the preflight"
 
       - name: Cleanup
         if: always()
