@@ -29,6 +29,17 @@ if [[ "${APP_NAME}" =~ [/\\] || "${APP_NAME}" == "." || "${APP_NAME}" == ".." ]]
   exit 1
 fi
 
+# Reject app-names that collide with the gitops repo's structural directories.
+# CHART_DEST is ${GITOPS_DIR}/${APP_NAME}, so e.g. app-name 'apps' would copy
+# the chart INTO the App-of-Apps watch dir, 'manifests' into the raw-manifests
+# dir, and '.git' would corrupt the git repo. These are never valid pack names.
+case "${APP_NAME}" in
+  apps | manifests | .git)
+    echo "::error::app-name '${APP_NAME}' is reserved — it collides with the gitops layout (apps/, manifests/, .git). Choose a different name."
+    exit 1
+    ;;
+esac
+
 CHART_DEST="${GITOPS_DIR}/${APP_NAME}"
 APP_DEST="${GITOPS_DIR}/apps/${APP_NAME}.yaml"
 

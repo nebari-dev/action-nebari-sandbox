@@ -58,7 +58,26 @@ jobs:
           nic-version: "main"
 
       - name: Smoke check
-        run: kubectl get applications -n argocd
+        env:
+          KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+        run: |
+          set -euo pipefail
+          # `kubectl get applications` exits 0 on zero apps, so assert a count
+          # and health rather than trusting a bare get (which passes vacuously).
+          kubectl get applications -n argocd
+          n=$(kubectl get applications -n argocd -o name | wc -l)
+          if (( n < 5 )); then
+            echo "::error::only ${n} ArgoCD Applications found — source-build deploy looks incomplete"
+            exit 1
+          fi
+          bad=$(kubectl get applications -n argocd \
+            -o jsonpath='{range .items[*]}{.metadata.name}={.status.health.status}{"\n"}{end}' \
+            | grep -vE '=(Healthy|Progressing)$' || true)
+          if [[ -n "${bad}" ]]; then
+            echo "::error::ArgoCD Applications not Healthy/Progressing:"; echo "${bad}"
+            exit 1
+          fi
+          echo "OK: ${n} ArgoCD Applications present, none Degraded/Missing"
 
       - name: Cleanup
         if: always()
