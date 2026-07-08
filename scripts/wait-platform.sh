@@ -20,11 +20,15 @@ KEYCLOAK_TIMEOUT="${KEYCLOAK_AWAIT_TIMEOUT:-600}"
 # then infra (cert-manager, Envoy), then workloads (Keycloak). MetalLB is no
 # longer in the list — under the `existing` provider NIC doesn't deploy it;
 # k3d's built-in servicelb (klipper) provides LoadBalancer IPs instead.
+# Keycloak's slow JVM boot also crash-restarts a few times before it settles,
+# so the shared restart budget trips (6 > 5) even when the pod ends up Ready
+# (#79). Same root cause as the timeout headroom above — give it its own,
+# overridable budget rather than failing a healthy cluster on the restart count.
 declare -A MAX_RESTARTS=(
   [argocd]=3
   [cert-manager]=3
   [envoy-gateway-system]=3
-  [keycloak]=5
+  [keycloak]="${KEYCLOAK_MAX_RESTARTS:-8}"
 )
 
 # Per-namespace readiness timeout. All share the base except Keycloak (above).
