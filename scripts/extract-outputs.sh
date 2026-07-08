@@ -49,6 +49,7 @@ done
 # (pkg/argocd/writer.go: `https://keycloak.<domain><KeycloakBasePath>`,
 # where KeycloakBasePath is empty for the existing provider).
 KEYCLOAK_ISSUER_URL=""
+DOMAIN=""
 if [[ -n "${GITOPS_DIR:-}" && -f "${GITOPS_DIR}/nic-config.yaml" ]]; then
   DOMAIN="$(awk '/^domain:/ {gsub(/["'"'"']/, "", $2); print $2; exit}' \
     "${GITOPS_DIR}/nic-config.yaml")"
@@ -77,4 +78,5 @@ echo "::endgroup::"
   echo "argocd-admin-password=${ARGOCD_PASS}"
   echo "gateway-ip=${GATEWAY_IP}"
   echo "keycloak-issuer-url=${KEYCLOAK_ISSUER_URL}"
+  echo "domain=${DOMAIN}"
 } >> "${GITHUB_OUTPUT}"

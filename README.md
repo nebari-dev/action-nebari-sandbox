@@ -266,6 +266,39 @@ what the action actually provisioned — see the input docs for details:
     nic-config: /tmp/my-nic-config.yaml
 ```
 
+#### Server-side OIDC from inside the cluster
+
+Browser-based auth reaches Keycloak from the runner via the gateway IP (the
+`curl --resolve` pattern above). But an app pod that validates OIDC *itself*
+(fetches the issuer from inside the cluster) needs two things the platform
+profile now sets up for you:
+
+- **In-cluster DNS.** Keycloak's discovery document advertises the external
+  issuer `https://keycloak.<domain>`, so pods must resolve that exact hostname.
+  The action adds a CoreDNS entry mapping `*.<domain>` to the gateway, so
+  `keycloak.<domain>` resolves the same inside pods as it does from the runner.
+  On by default; set `in-cluster-dns: false` to manage DNS yourself.
+- **CA trust.** The gateway serves a selfsigned certificate. The action writes
+  its CA to the runner (`ca-cert-path` output) and publishes it in-cluster as
+  ConfigMap `nebari-sandbox-ca` (key `ca.crt`) in `kube-public`. Mount it in
+  your pod so standard TLS trusts `https://<domain>`:
+
+```yaml
+- name: Give my-app the sandbox CA
+  env:
+    KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+  run: |
+    # Copy the well-known CA into your app's namespace, then mount it and point
+    # the runtime at it (SSL_CERT_FILE / REQUESTS_CA_BUNDLE / NODE_EXTRA_CA_CERTS).
+    kubectl get configmap nebari-sandbox-ca -n kube-public -o yaml \
+      | sed 's/namespace: kube-public/namespace: default/' \
+      | kubectl apply -f -
+```
+
+> **TLS SANs:** only `<domain>`, `keycloak.<domain>`, and `argocd.<domain>` are
+> covered by the gateway certificate today, so those are the hostnames that both
+> resolve *and* pass TLS from inside the cluster.
+
 <!--
   Inputs and Outputs sections below are auto-generated from action.yml by
   npm's `action-docs` (run by .github/workflows/docs-check.yml on each PR).
@@ -289,6 +322,7 @@ what the action actually provisioned — see the input docs for details:
 | `timing-report` | <p>When 'true', record wall-clock durations for key phases (k3s image pull, k3d cluster create, nic deploy, etc.) and append a markdown timing table to $GITHUB<em>STEP</em>SUMMARY. Works with both profiles. Intended for benchmarking and profiling CI runs; has no effect on normal operation when 'false'.</p> | `false` | `false` |
 | `nic-version` | <p>NIC version to install (platform profile only). - 'latest' (default): downloads the latest released pre-built binary. - 'vX.Y.Z': downloads a specific release's pre-built binary. - '.': builds from $GITHUB_WORKSPACE (use when the consumer has the   NIC repo checked out, e.g. NIC's own self-tests).</p> <ul> <li>Any other string (branch name, tag, commit sha): clones that ref and builds from source. Requires Go in the consumer's workflow (add actions/setup-go before this action).</li> </ul> | `false` | `latest` |
 | `nic-config` | <p>Path to a consumer-supplied NIC config file (platform profile only). When set, the action skips its built-in config template and passes this file to <code>nic deploy -f</code> directly. The consumer is responsible for matching the rest of the action's setup — two fields in particular must point at what the action actually provisioned:</p> <ul> <li><code>cluster.existing.context</code> — derived as <code>k3d-&lt;cluster-name&gt;</code> (e.g. <code>k3d-nebari-test</code> for the default cluster-name). The action provisions the k3d cluster itself, so NIC connects to it via the <code>existing</code> provider rather than provisioning one.</li> <li><code>git_repository.url</code> — derived as <code>file:///tmp/nebari-gitops-&lt;cluster-name&gt;</code> (a hostPath mount into the k3d node so ArgoCD's repo-server can read it).</li> </ul> <p>The action does not validate these; NIC's config parser will surface real mismatches at deploy time. When unset (default), the action generates its standard config as before.</p> | `false` | `""` |
+| `in-cluster-dns` | <p>When 'true' (default) and profile is 'platform', add a CoreDNS entry so the external Nebari hostnames (<code>*.&lt;domain&gt;</code>, e.g. <code>keycloak.nebari.local</code>) resolve to the gateway from INSIDE the cluster. Required for consumer pods doing server-side OIDC: Keycloak's discovery document advertises the external issuer, so a pod must reach that same hostname (see #69). Only <code>keycloak.&lt;domain&gt;</code>, <code>argocd.&lt;domain&gt;</code>, and <code>&lt;domain&gt;</code> have valid TLS SANs. Set 'false' if you manage in-cluster DNS yourself.</p> | `false` | `true` |
 <!-- action-docs-inputs action="action.yml" -->
 
 <!-- action-docs-outputs action="action.yml" -->
@@ -304,6 +338,8 @@ what the action actually provisioned — see the input docs for details:
 | `argocd-admin-password` | <p>ArgoCD admin password (platform profile only)</p> |
 | `gateway-ip` | <p>Gateway LoadBalancer IP (platform profile only), assigned by k3d's servicelb (klipper).</p> |
 | `keycloak-issuer-url` | <p>External public issuer URL for the Keycloak deployment (platform profile only), e.g. <code>https://keycloak.nebari.local</code>. Derived from the <code>domain</code> field in the NIC config NIC wrote to the gitops repo, matching NIC's own formula. Useful for JWT <code>iss</code> claim validation in consumer e2e tests.</p> |
+| `domain` | <p>The Nebari domain the platform was deployed with (platform profile only), e.g. <code>nebari.local</code>. Read from the NIC config in the gitops repo. Handy for building the hostnames consumers route to (<code>keycloak.&lt;domain&gt;</code>, etc.).</p> |
+| `ca-cert-path` | <p>Path on the runner to the sandbox gateway's CA certificate (platform profile only), extracted from the <code>nebari-gateway-tls</code> secret. Use it for runner-side <code>curl --cacert</code>, or to build a ConfigMap/Secret your pods mount so they trust <code>https://&lt;domain&gt;</code> (the gateway serves a selfsigned cert). The same CA is published in-cluster as ConfigMap <code>nebari-sandbox-ca</code> (key <code>ca.crt</code>) in the <code>kube-public</code> namespace. Empty if the gateway TLS secret could not be read (see #69).</p> |
 <!-- action-docs-outputs action="action.yml" -->
 
 ## Cleanup
