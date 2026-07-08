@@ -363,6 +363,12 @@ The action does not automatically delete the cluster. Add a cleanup step to your
 - **Both profiles:** `ubuntu-24.04` (or `ubuntu-latest`) runner with Docker (pre-installed on GitHub-hosted runners)
 - **`platform` profile:** none extra by default (NIC's pre-built binary is downloaded). Go 1.25+ via `actions/setup-go@v6` is only needed if you set `nic-version` to a non-release ref (branch, sha, or `.`) and want to build from source.
 
+## Contributing
+
+Adding a step, script, or test? See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+conventions — the gates-fail/extractors-warn split, where tests belong (unit vs
+scenario vs inline), and the script/workflow idioms.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
