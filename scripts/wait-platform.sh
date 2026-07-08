@@ -58,6 +58,10 @@ for ns in argocd cert-manager envoy-gateway-system keycloak; do
 
   ns_count=0
   found_any=false
+  # Assumed contract: every foundational namespace ships at least one of these
+  # three kinds. A component that ever shipped as only a Job/CronJob/bare Pod
+  # would need adding here, else this gate would false-fail a healthy cluster
+  # (#76).
   for kind in deployment daemonset statefulset; do
     names=$(kubectl get "$kind" -n "$ns" --no-headers \
       -o custom-columns=':metadata.name' 2>/dev/null || true)
