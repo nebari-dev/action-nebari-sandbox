@@ -4,6 +4,8 @@
 # single, clean status gate rather than managing per-namespace await steps.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 TIMEOUT="${AWAIT_TIMEOUT:-300}"
 
 # Keycloak (KeycloakX, JVM) is the slowest foundational workload to boot and is
@@ -93,23 +95,20 @@ for ns in argocd cert-manager envoy-gateway-system keycloak; do
     overall_ok=false
   fi
 
-  # Restart count guard
-  exceeded=$(
-    kubectl get pods -n "$ns" -o json \
-    | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for pod in data['items']:
-  for cs in pod.get('status', {}).get('containerStatuses', []):
-    rc = cs.get('restartCount', 0)
-    if rc > int('${max_r}'):
-      print(f\"  {pod['metadata']['name']} / {cs['name']}: {rc} restarts (limit {${max_r}})\")
-" 2>/dev/null || true
-  )
-  if [[ -n "$exceeded" ]]; then
-    echo "  Restart limit exceeded:"
-    echo "$exceeded"
-    overall_ok=false
+  # Restart count guard: flag containers that have restarted more than this
+  # namespace's budget. The logic lives in check-restart-count.py (limit passed
+  # as an argument, unit-tested offline) rather than python inlined into shell
+  # (#84). kubectl failures on a missing namespace are swallowed here (found_any
+  # above already handles that case); python is only run on non-empty JSON, so a
+  # real parse error surfaces instead of being hidden.
+  pods_json="$(kubectl get pods -n "$ns" -o json 2>/dev/null || true)"
+  if [[ -n "${pods_json}" ]]; then
+    exceeded="$(printf '%s' "${pods_json}" | python3 "${SCRIPT_DIR}/check-restart-count.py" "${max_r}")"
+    if [[ -n "${exceeded}" ]]; then
+      echo "  Restart limit exceeded:"
+      echo "${exceeded}"
+      overall_ok=false
+    fi
   fi
 
   echo "  ${ns_count} resource(s) ready in ${ns}"
