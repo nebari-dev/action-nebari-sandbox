@@ -7,9 +7,15 @@
 #                       where the action consumer has the NIC repo checked out).
 #   - anything else   : treat as a git ref (branch, tag, sha), clone and build
 #                       from source. Requires Go in the consumer's workflow.
+#
+# If NIC_BINARY is set, it takes precedence: the given prebuilt binary is
+# installed and NIC_VERSION is ignored (unless NIC_VERSION was also set to a
+# non-default value, which is a conflict). Lets a workflow build nic once and
+# reuse it across jobs instead of rebuilding each time.
 set -euo pipefail
 
 NIC_VERSION="${NIC_VERSION:-latest}"
+NIC_BINARY="${NIC_BINARY:-}"
 NIC_REPO="nebari-dev/nebari-infrastructure-core"
 NIC_INSTALL="/usr/local/bin/nic"
 
@@ -130,7 +136,36 @@ _build_from_source() {
   ( cd "${src}" && CGO_ENABLED=0 go build -trimpath -o "${NIC_INSTALL}" ./cmd/nic )
 }
 
+# Install a consumer-supplied prebuilt nic binary (the nic-binary input). Lets a
+# workflow build nic once (e.g. a single build job) and hand the path to the
+# action in each downstream job, rather than the action building from source
+# every time.
+_install_prebuilt() {
+  local src="$1"
+  if [ ! -f "${src}" ]; then
+    echo "::error::nic-binary points to a non-existent file: ${src}" >&2
+    exit 1
+  fi
+  echo "::group::Install NIC (prebuilt binary: ${src})"
+  sudo install -m 755 "${src}" "${NIC_INSTALL}"
+  echo "nic installed at $(which nic)"
+  nic version
+  echo "::endgroup::"
+}
+
 main() {
+  # nic-binary wins over nic-version. Setting both to meaningful values is a
+  # conflict: nic-version defaults to 'latest', so treat anything other than
+  # that as an explicit (conflicting) choice and fail fast.
+  if [ -n "${NIC_BINARY}" ]; then
+    if [ "${NIC_VERSION}" != "latest" ]; then
+      echo "::error::set only one of nic-binary and nic-version (got nic-binary='${NIC_BINARY}', nic-version='${NIC_VERSION}'). Leave nic-version unset when using nic-binary." >&2
+      exit 1
+    fi
+    _install_prebuilt "${NIC_BINARY}"
+    return
+  fi
+
   echo "::group::Install NIC (nic-version=${NIC_VERSION})"
 
   local resolved="${NIC_VERSION}"
