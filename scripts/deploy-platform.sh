@@ -68,23 +68,13 @@ fi
 
 echo "::group::Deploy Nebari platform via NIC"
 
-# NIC creates the gitops directory with explicit owner-only permissions
-# (0750 dirs, 0600 files). On Linux, the ArgoCD repo-server pod (uid 999)
-# accesses this via a hostPath bind mount and can't read those files.
-# umask doesn't help because NIC sets permissions explicitly in Go code.
-#
-# Run a background loop that continuously fixes permissions while NIC deploys.
-# This ensures ArgoCD can read the repo as soon as it starts, rather than
-# after NIC's internal 5-minute LB wait times out.
-(
-  while true; do
-    chmod -R a+rX "${GITOPS_DIR}" 2>/dev/null || true
-    sleep 2
-  done
-) &
-CHMOD_PID=$!
-trap "kill ${CHMOD_PID} 2>/dev/null || true" EXIT
-
+# SPIKE (#80): the background `chmod -R a+rX` loop that used to run here is
+# removed. NIC's gitops repo used to be written owner-only (0750/0600), so the
+# non-root ArgoCD repo-server (uid 999) couldn't read it through the hostPath
+# mount. NIC PR #448 fixes this at the source: on Init and every commit to a
+# local file:// repo, NIC makes the repo root + `.git` group/other-readable
+# (additively, .git-only), which is all repo-server reads. So the loop is
+# redundant when running a NIC build that includes #448 (nic-version=main here).
 _nic_start=$(_now_ms)
 # Tee NIC's structured JSON logs to a file so collect-deploy-timings.py can
 # parse phase pairs ("Installing Argo CD" → "Argo CD installed", etc.) for
@@ -102,10 +92,8 @@ if [[ "${NEBARI_TIMING_REPORT:-false}" == "true" ]]; then
   _record_timing "nic deploy (total)" "${_nic_start}" "${_nic_end}"
 fi
 
-# Final permission fix to catch anything written during the last seconds
-chmod -R a+rX "${GITOPS_DIR}"
-
-kill "${CHMOD_PID}" 2>/dev/null || true
+# SPIKE (#80): the final `chmod -R a+rX` + loop teardown are gone too - NIC #448
+# leaves .git readable after its commits, so no post-deploy fixup is needed.
 
 # Deploy-phase timing collection (kubelet Pulled events, ArgoCD app sync,
 # NIC log phase parsing) runs as a dedicated post-await step in action.yml
