@@ -361,7 +361,7 @@ The action does not automatically delete the cluster. Add a cleanup step to your
 ## Requirements
 
 - **Both profiles:** `ubuntu-24.04` (or `ubuntu-latest`) runner with Docker (pre-installed on GitHub-hosted runners)
-- **`platform` profile:** none extra by default (NIC's pre-built binary is downloaded). Go 1.25+ via `actions/setup-go@v6` is only needed if you set `nic-version` to a non-release ref (branch, sha, or `.`) and want to build from source.
+- **`platform` profile:** none extra by default (NIC's pre-built binary is downloaded). Go 1.26+ via `actions/setup-go@v6` is only needed if you set `nic-version` to a non-release ref (branch, sha, or `.`) and want to build from source (match NIC's `go.mod`).
 
 ## Contributing
 
