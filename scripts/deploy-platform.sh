@@ -68,23 +68,13 @@ fi
 
 echo "::group::Deploy Nebari platform via NIC"
 
-# NIC creates the gitops directory with explicit owner-only permissions
-# (0750 dirs, 0600 files). On Linux, the ArgoCD repo-server pod (uid 999)
-# accesses this via a hostPath bind mount and can't read those files.
-# umask doesn't help because NIC sets permissions explicitly in Go code.
-#
-# Run a background loop that continuously fixes permissions while NIC deploys.
-# This ensures ArgoCD can read the repo as soon as it starts, rather than
-# after NIC's internal 5-minute LB wait times out.
-(
-  while true; do
-    chmod -R a+rX "${GITOPS_DIR}" 2>/dev/null || true
-    sleep 2
-  done
-) &
-CHMOD_PID=$!
-trap "kill ${CHMOD_PID} 2>/dev/null || true" EXIT
-
+# NIC used to write the gitops repo owner-only (0750 dirs, 0600 files), so the
+# non-root ArgoCD repo-server (uid 999) couldn't read it through the hostPath
+# mount, and we ran a background `chmod -R a+rX` loop to keep it readable during
+# deploy. NIC now fixes this at the source (nebari-dev/nebari-infrastructure-core
+# PR #448): on Init and every commit to a local file:// repo it makes the repo
+# root + `.git` group/other-readable (additively, .git-only), which is all
+# repo-server reads. So the loop is no longer needed. See #80.
 _nic_start=$(_now_ms)
 # Tee NIC's structured JSON logs to a file so collect-deploy-timings.py can
 # parse phase pairs ("Installing Argo CD" → "Argo CD installed", etc.) for
@@ -102,10 +92,7 @@ if [[ "${NEBARI_TIMING_REPORT:-false}" == "true" ]]; then
   _record_timing "nic deploy (total)" "${_nic_start}" "${_nic_end}"
 fi
 
-# Final permission fix to catch anything written during the last seconds
-chmod -R a+rX "${GITOPS_DIR}"
-
-kill "${CHMOD_PID}" 2>/dev/null || true
+# (No post-deploy chmod: NIC #448 leaves .git readable after its commits.)
 
 # Deploy-phase timing collection (kubelet Pulled events, ArgoCD app sync,
 # NIC log phase parsing) runs as a dedicated post-await step in action.yml
