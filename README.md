@@ -113,6 +113,7 @@ ${GITOPS_DIR}/
     apps/                            (root App-of-Apps watches this directory)
         cert-manager.yaml
         certificates.yaml
+        cloudnative-pg.yaml
         cluster-issuers.yaml
         envoy-gateway.yaml
         gateway-config.yaml
@@ -186,7 +187,7 @@ metadata:
   name: my-app
   namespace: argocd
 spec:
-  project: default                            # or `foundational` — both work
+  project: nebari-apps                        # consumer apps use the `nebari-apps` project (NIC >= v0.10.0)
   source:
     repoURL: "file://${GITOPS_DIR}"           # envsubst-rendered by the sub-action
     targetRevision: HEAD
