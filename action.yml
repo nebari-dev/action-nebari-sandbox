@@ -49,8 +49,20 @@ inputs:
       - Any other string (branch name, tag, commit sha): clones that ref
         and builds from source. Requires Go in the consumer's workflow
         (add actions/setup-go before this action).
+      Ignored when `nic-binary` is set. Leave at the default if you use
+      `nic-binary`; setting both to meaningful values is an error.
     required: false
     default: "latest"
+  nic-binary:
+    description: >
+      Path to a pre-built `nic` binary on the runner (platform profile only).
+      When set, the action installs it directly and ignores `nic-version` — use
+      this to build `nic` once in an earlier job (e.g. upload/download it as an
+      artifact) and reuse it across per-provider or matrix jobs instead of
+      rebuilding from source each time. Mutually exclusive with a non-default
+      `nic-version`.
+    required: false
+    default: ""
   nic-config:
     description: >
       Path to a consumer-supplied NIC config file (platform profile only).
@@ -161,6 +173,7 @@ runs:
       run: ${{ github.action_path }}/scripts/install-nic.sh
       env:
         NIC_VERSION: ${{ inputs.nic-version }}
+        NIC_BINARY: ${{ inputs.nic-binary }}
         # Used by install-nic.sh for authenticated GitHub API calls (release
         # metadata + checksums.txt). Avoids the 60/hr unauthenticated rate
         # limit, which can bite on self-hosted runners sharing an egress IP.
