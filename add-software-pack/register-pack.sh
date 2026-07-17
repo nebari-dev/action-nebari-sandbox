@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Register a consumer Application + chart content into the platform's GitOps
-# repo. Runs the four-step ritual: copy → envsubst → commit → chmod. Called
+# repo. Runs the ritual: copy → envsubst → commit. Called
 # by add-software-pack/action.yml; see that file's input descriptions for
 # semantics.
 
@@ -68,10 +68,11 @@ git -C "${GITOPS_DIR}" \
   -c user.name="${GIT_AUTHOR_NAME:-add-software-pack}" \
   commit -m "${COMMIT_MESSAGE:-add ${APP_NAME}}"
 
-# ── 4. chmod fixup. argocd-repo-server runs as uid 999 inside the cluster ────
-# and can't read files written with default runner-uid-only perms.
-chmod -R a+rX "${GITOPS_DIR}"
-
+# No chmod fixup: NIC (>= v0.10.0, PR #448) makes the repo root + `.git`
+# group/other-readable on every commit to a local file:// repo, and the non-root
+# argocd-repo-server reads committed content from `.git` (not the working tree).
+# The objects this commit adds land at the runner's default umask (0644/0755 on
+# GitHub runners), so they're readable without a manual fixup. See #80.
 echo "::endgroup::"
 
 # ── Outputs ──────────────────────────────────────────────────────────────────

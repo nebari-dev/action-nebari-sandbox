@@ -130,7 +130,7 @@ ${GITOPS_DIR}/
 
 #### Recommended: use the `add-software-pack` sub-action
 
-Wraps the copy → envsubst → commit → chmod ritual into one step, plus a
+Wraps the copy → envsubst → commit ritual into one step, plus a
 built-in wait for the resulting ArgoCD `Application` to reach `Healthy`.
 Your `application.yaml` can reference `${GITOPS_DIR}` and any other env
 vars in scope at invocation time:
@@ -207,7 +207,7 @@ spec:
 
 #### Without the sub-action
 
-If you'd rather not bring in the sub-action, the underlying ritual is four
+If you'd rather not bring in the sub-action, the underlying ritual is three
 steps. Useful when you want fine-grained control over the commit, or to keep
 the workflow free of extra `uses:` lines:
 
@@ -231,9 +231,9 @@ the workflow free of extra `uses:` lines:
       -c user.email=ci@my-app \
       -c user.name=my-app-ci \
       commit -m "add my-app"
-
-    # 4. Re-fix perms. argocd-repo-server runs as uid 999 in-cluster.
-    chmod -R a+rX "${GITOPS_DIR}"
+    # No perm fixup needed: NIC (>= v0.10.0) makes the repo's `.git` readable by
+    # the non-root repo-server on commit, and ArgoCD reads committed content from
+    # `.git`, not the working tree.
 ```
 
 #### Customizing the NIC config
