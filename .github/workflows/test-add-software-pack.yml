@@ -71,7 +71,7 @@ jobs:
             name: e2e-test-app
             namespace: argocd
           spec:
-            project: default
+            project: nebari-apps
             source:
               repoURL: "file://${GITOPS_DIR}"
               targetRevision: HEAD

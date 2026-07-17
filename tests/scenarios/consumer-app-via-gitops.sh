@@ -74,7 +74,7 @@ metadata:
   name: ${APP_NAME}
   namespace: argocd
 spec:
-  project: default
+  project: nebari-apps
   source:
     repoURL: "file://${GITOPS_DIR}"
     targetRevision: HEAD
