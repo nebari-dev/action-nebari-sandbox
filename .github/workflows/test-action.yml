@@ -265,7 +265,7 @@ jobs:
           CLUSTER_NAME: nebari-kind-bench
         run: ${{ github.workspace }}/scripts/publish-ca.sh
 
-      - name: Generate resource summary (parity with resource-summary: true)
+      - name: "Generate resource summary (parity with resource-summary: true)"
         shell: bash
         run: python3 ${{ github.workspace }}/scripts/resource-summary.py
 
