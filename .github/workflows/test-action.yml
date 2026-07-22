@@ -185,3 +185,92 @@ jobs:
         run: |
           k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
 
+
+  # Benchmark / parallel comparison (draft): deploy the SAME platform via NIC's
+  # own local provider (kind), which NIC provisions in-process via the kind Go
+  # library - instead of the action's k3d + existing-provider path. Runs the
+  # exact same scenario suite so we can compare both provisioning methods
+  # (works? how long?) side by side in one workflow run.
+  benchmark-nic-local-kind:
+    name: "Platform via NIC local provider (kind) [benchmark]"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install nic (latest - same binary the k3d job uses)
+        shell: bash
+        env:
+          NIC_VERSION: latest
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ${{ github.workspace }}/scripts/install-nic.sh
+
+      - name: Write NIC local (kind) config
+        shell: bash
+        run: |
+          cat > /tmp/nic-local.yaml <<'EOF'
+          project_name: nebari-kind-bench
+          domain: nebari.local
+          certificate:
+            type: selfsigned
+          cluster:
+            local: {}
+          EOF
+          echo "--- config ---"; cat /tmp/nic-local.yaml
+
+      - name: Deploy platform via NIC local provider (kind)
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          nic deploy -f /tmp/nic-local.yaml --timeout 15m
+          dur=$(( $(date +%s) - start ))
+          echo "kind-local-deploy-seconds=${dur}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### NIC local (kind) benchmark"
+            echo ""
+            echo "\`nic deploy\` (kind create + foundational stack): **${dur}s**"
+            echo ""
+            echo "Compare against the k3d job's \"Setup Nebari Sandbox\" step duration in this run."
+          } >> "$GITHUB_STEP_SUMMARY"
+        id: deploy
+
+      - name: Point kubectl at the kind cluster
+        shell: bash
+        run: kubectl config use-context kind-nebari-kind-bench
+
+      - name: Run consumer-app scenario (portable subset)
+        shell: bash
+        # NOTE: not the full run-scenarios.sh. The 00-foundational-apps-tree
+        # drift guard is tuned to the k3d/existing-provider app set; the local
+        # (kind) provider additionally deploys MetalLB (kind has no built-in LB),
+        # so its apps/ set legitimately differs. Run the consumer-app gitops flow
+        # (the portable part) + the health smoke check below instead.
+        run: bash tests/scenarios/consumer-app-via-gitops.sh
+
+      - name: Smoke-check foundational health
+        shell: bash
+        run: |
+          set -euo pipefail
+          n=$(kubectl get applications -n argocd -o name | wc -l)
+          if (( n < 5 )); then
+            echo "::error::only ${n} ArgoCD Applications found - foundational install looks incomplete"; exit 1
+          fi
+          health=$(kubectl get applications -n argocd \
+            -o jsonpath='{range .items[*]}{.metadata.name}={.status.health.status}{"\n"}{end}')
+          broken=$(echo "${health}" | grep -E '=(Missing|Unknown)$' || true)
+          if [[ -n "${broken}" ]]; then echo "::error::ArgoCD Applications broken:"; echo "${broken}"; exit 1; fi
+          degraded=$(echo "${health}" | grep -E '=Degraded$' || true)
+          [[ -n "${degraded}" ]] && echo "::warning::Degraded (not failing): ${degraded}"
+          echo "OK: ${n} ArgoCD Applications present, none Missing/Unknown"
+
+      - name: Debug on failure
+        if: failure()
+        run: |
+          kubectl get pods -A || true
+          kubectl get applications -n argocd -o wide || true
+          kubectl get events -A --field-selector type=Warning --sort-by='.lastTimestamp' 2>/dev/null | tail -30 || true
+
+      - name: Cleanup
+        if: always()
+        run: nic destroy -f /tmp/nic-local.yaml --force || true
