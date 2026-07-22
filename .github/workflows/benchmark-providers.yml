@@ -11,6 +11,11 @@ on:
         description: "Runs per provider (median across these)"
         required: false
         default: "3"
+  # TEMPORARY (draft): lets the median run on the draft branch before the
+  # workflow is on the default branch (workflow_dispatch requires that). Remove.
+  push:
+    branches: [test/benchmark-kind-local]
+    paths: ['.github/workflows/benchmark-providers.yml']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
