@@ -1,0 +1,161 @@
+name: Benchmark providers (k3d vs kind) [draft]
+
+# Draft benchmark: deploy the same foundational platform N times via each
+# provisioning method - k3d + existing provider (the action) vs kind + local
+# provider (NIC provisions its own cluster) - and report the MEDIAN deploy time
+# and peak resource stress per provider. Manual only.
+on:
+  workflow_dispatch:
+    inputs:
+      samples:
+        description: "Runs per provider (median across these)"
+        required: false
+        default: "3"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    runs-on: ubuntu-24.04
+    outputs:
+      indices: ${{ steps.gen.outputs.indices }}
+    steps:
+      - id: gen
+        run: |
+          n="${{ github.event.inputs.samples }}"
+          idx=$(python3 -c "print(list(range(1, int('${n}')+1)))")
+          echo "indices=${idx}" >> "$GITHUB_OUTPUT"
+          echo "samples: ${idx}"
+
+  k3d:
+    needs: setup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        sample: ${{ fromJSON(needs.setup.outputs.indices) }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Mark start
+        run: echo "BENCH_START=$(date +%s)" >> "$GITHUB_ENV"
+      - name: Start resource monitor
+        run: ${{ github.workspace }}/tests/bench/resource-monitor.sh start
+      - name: Setup Nebari Sandbox (k3d + existing)
+        uses: ./
+        with:
+          profile: platform
+          cluster-name: bench-k3d-${{ matrix.sample }}
+          resource-summary: "true"
+      - name: Record metrics
+        if: always()
+        run: |
+          dur=$(( $(date +%s) - BENCH_START ))
+          BENCH_METRICS_OUT=/tmp/peaks.txt ${{ github.workspace }}/tests/bench/resource-monitor.sh stop "k3d sample ${{ matrix.sample }}" || true
+          read -r mem load cmem < /tmp/peaks.txt
+          mkdir -p metrics
+          echo "${dur} ${mem} ${load} ${cmem}" > "metrics/k3d-${{ matrix.sample }}.txt"
+          cat "metrics/k3d-${{ matrix.sample }}.txt"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: bench-k3d-${{ matrix.sample }}
+          path: metrics/
+      - name: Cleanup
+        if: always()
+        run: k3d cluster delete bench-k3d-${{ matrix.sample }} 2>/dev/null || true
+
+  kind:
+    needs: setup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        sample: ${{ fromJSON(needs.setup.outputs.indices) }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install nic (latest)
+        env:
+          NIC_VERSION: latest
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ${{ github.workspace }}/scripts/install-nic.sh
+      - name: Write NIC local (kind) config
+        run: |
+          cat > /tmp/nic-local.yaml <<'EOF'
+          project_name: nebari-kind-bench
+          domain: nebari.local
+          certificate:
+            type: selfsigned
+          cluster:
+            local: {}
+          EOF
+      - name: Mark start
+        run: echo "BENCH_START=$(date +%s)" >> "$GITHUB_ENV"
+      - name: Start resource monitor
+        run: ${{ github.workspace }}/tests/bench/resource-monitor.sh start
+      - name: Deploy platform (kind + local)
+        run: nic deploy -f /tmp/nic-local.yaml --timeout 15m
+      - name: Post-deploy parity (extract / DNS / CA / summary)
+        run: |
+          set -euo pipefail
+          kubectl config use-context kind-nebari-kind-bench
+          export GITOPS_DIR="${HOME}/.nic/gitops/nebari-kind-bench"
+          "${GITHUB_WORKSPACE}/scripts/extract-outputs.sh" || true
+          DOMAIN=nebari.local "${GITHUB_WORKSPACE}/scripts/setup-in-cluster-dns.sh" || true
+          CLUSTER_NAME=nebari-kind-bench "${GITHUB_WORKSPACE}/scripts/publish-ca.sh" || true
+          python3 "${GITHUB_WORKSPACE}/scripts/resource-summary.py" || true
+      - name: Record metrics
+        if: always()
+        run: |
+          dur=$(( $(date +%s) - BENCH_START ))
+          BENCH_METRICS_OUT=/tmp/peaks.txt ${{ github.workspace }}/tests/bench/resource-monitor.sh stop "kind sample ${{ matrix.sample }}" || true
+          read -r mem load cmem < /tmp/peaks.txt
+          mkdir -p metrics
+          echo "${dur} ${mem} ${load} ${cmem}" > "metrics/kind-${{ matrix.sample }}.txt"
+          cat "metrics/kind-${{ matrix.sample }}.txt"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: bench-kind-${{ matrix.sample }}
+          path: metrics/
+      - name: Cleanup
+        if: always()
+        run: nic destroy -f /tmp/nic-local.yaml --force 2>/dev/null || true
+
+  aggregate:
+    needs: [setup, k3d, kind]
+    if: always() && !cancelled()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: bench-*
+          merge-multiple: true
+          path: metrics
+      - name: Compute medians and report
+        run: |
+          python3 - <<'PY'
+          import glob, statistics, os
+          def load(provider):
+              rows=[]
+              for f in glob.glob(f"metrics/{provider}-*.txt"):
+                  parts=open(f).read().split()
+                  if len(parts)==4:
+                      rows.append([float(x) for x in parts])
+              return rows
+          def med(rows, col):
+              vals=[r[col] for r in rows]
+              return round(statistics.median(vals),1) if vals else None
+          cols=["deploy s","peak host mem MB","peak load1","peak container mem MB"]
+          out=os.environ.get("GITHUB_STEP_SUMMARY","/dev/stdout")
+          with open(out,"a") as w:
+              w.write("## Provider benchmark medians (k3d vs kind)\n\n")
+              k3d=load("k3d"); kind=load("kind")
+              w.write(f"Samples: k3d={len(k3d)}, kind={len(kind)}\n\n")
+              w.write("| metric | k3d / existing | kind / local |\n|---|---|---|\n")
+              for i,name in enumerate(cols):
+                  w.write(f"| {name} | {med(k3d,i)} | {med(kind,i)} |\n")
+              w.write("\nDeploy time = mark-start (before provisioning) to platform+parity up. Peaks sampled every ~3s.\n")
+          print("done")
+          PY

@@ -75,6 +75,11 @@ print(text)
 if out:
     with open(out, "a") as f:
         f.write(text + "\n")
+# Machine-readable peaks for median aggregation: "peak_mem_mb peak_load peak_cmem_mb"
+metrics = os.environ.get("BENCH_METRICS_OUT")
+if metrics:
+    with open(metrics, "w") as f:
+        f.write(f"{max(mem)} {max(load)} {max(cmem)}\n")
 PY
     ;;
   *)
