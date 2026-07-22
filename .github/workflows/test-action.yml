@@ -239,6 +239,36 @@ jobs:
         shell: bash
         run: kubectl config use-context kind-nebari-kind-bench
 
+      # Mirror the composite action's post-deploy steps so this job does the same
+      # functional work as the k3d path - extract-outputs, in-cluster DNS, and CA
+      # publish are all needed on kind too (same OIDC/TLS story), so timing them
+      # here makes the comparison like-for-like. (wait-platform is skipped: it is
+      # redundant with nic deploy's own wait, which the kind path already pays.)
+      - name: Extract platform outputs (parity with k3d)
+        shell: bash
+        run: |
+          # NIC's local provider auto-creates the gitops repo at
+          # ~/.nic/gitops/<project_name>; extract-outputs reads nic-config.yaml
+          # from there for the domain/issuer.
+          export GITOPS_DIR="${HOME}/.nic/gitops/nebari-kind-bench"
+          "${GITHUB_WORKSPACE}/scripts/extract-outputs.sh"
+
+      - name: Set up in-cluster DNS (parity with k3d)
+        shell: bash
+        env:
+          DOMAIN: nebari.local
+        run: ${{ github.workspace }}/scripts/setup-in-cluster-dns.sh
+
+      - name: Publish sandbox CA (parity with k3d)
+        shell: bash
+        env:
+          CLUSTER_NAME: nebari-kind-bench
+        run: ${{ github.workspace }}/scripts/publish-ca.sh
+
+      - name: Generate resource summary (parity with resource-summary: true)
+        shell: bash
+        run: python3 ${{ github.workspace }}/scripts/resource-summary.py
+
       - name: Run consumer-app scenario (portable subset)
         shell: bash
         # NOTE: not the full run-scenarios.sh. The 00-foundational-apps-tree
