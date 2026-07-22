@@ -29,7 +29,8 @@ jobs:
     steps:
       - id: gen
         run: |
-          n="${{ github.event.inputs.samples }}"
+          # inputs.samples is empty on a push event; default to 3.
+          n="${{ github.event.inputs.samples || '3' }}"
           idx=$(python3 -c "print(list(range(1, int('${n}')+1)))")
           echo "indices=${idx}" >> "$GITHUB_OUTPUT"
           echo "samples: ${idx}"
