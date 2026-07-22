@@ -89,6 +89,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Start resource monitor (benchmark)
+        shell: bash
+        run: ${{ github.workspace }}/tests/bench/resource-monitor.sh start
+
       - name: Setup Nebari Sandbox
         id: sandbox
         uses: ./
@@ -101,6 +105,11 @@ jobs:
         run: bash tests/run-scenarios.sh
         env:
           KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+
+      - name: Resource stress summary (k3d / existing) [benchmark]
+        if: always()
+        shell: bash
+        run: ${{ github.workspace }}/tests/bench/resource-monitor.sh stop "k3d / existing provider"
 
       - name: Verify keycloak-issuer-url output (#25)
         # Default action config sets `domain: nebari.local`, so the derived
@@ -218,6 +227,10 @@ jobs:
           EOF
           echo "--- config ---"; cat /tmp/nic-local.yaml
 
+      - name: Start resource monitor (benchmark)
+        shell: bash
+        run: ${{ github.workspace }}/tests/bench/resource-monitor.sh start
+
       - name: Deploy platform via NIC local provider (kind)
         shell: bash
         run: |
@@ -293,6 +306,11 @@ jobs:
           degraded=$(echo "${health}" | grep -E '=Degraded$' || true)
           [[ -n "${degraded}" ]] && echo "::warning::Degraded (not failing): ${degraded}"
           echo "OK: ${n} ArgoCD Applications present, none Missing/Unknown"
+
+      - name: Resource stress summary (kind / local) [benchmark]
+        if: always()
+        shell: bash
+        run: ${{ github.workspace }}/tests/bench/resource-monitor.sh stop "kind / local provider"
 
       - name: Debug on failure
         if: failure()
