@@ -3,7 +3,9 @@ name: Benchmark providers (k3d vs kind) [draft]
 # Draft benchmark: deploy the same foundational platform N times via each
 # provisioning method - k3d + existing provider (the action) vs kind + local
 # provider (NIC provisions its own cluster) - and report the MEDIAN deploy time
-# and peak resource stress per provider. Manual only.
+# and peak resource stress per provider. Optionally, after the platform is up,
+# install the nebi software pack (cloned locally, registered via
+# add-software-pack) and measure its added "real utilization" delta. Manual.
 on:
   workflow_dispatch:
     inputs:
@@ -11,7 +13,11 @@ on:
         description: "Runs per provider (median across these)"
         required: false
         default: "3"
-  # TEMPORARY (draft): lets the median run on the draft branch before the
+      pack:
+        description: "Software pack to add after platform (none|nebi)"
+        required: false
+        default: "nebi"
+  # TEMPORARY (draft): lets the benchmark run on the draft branch before the
   # workflow is on the default branch (workflow_dispatch requires that). Remove.
   push:
     branches: [test/benchmark-kind-local]
@@ -26,62 +32,116 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       indices: ${{ steps.gen.outputs.indices }}
+      pack: ${{ steps.gen.outputs.pack }}
     steps:
       - id: gen
         run: |
-          # inputs.samples is empty on a push event; default to 3.
-          n="${{ github.event.inputs.samples || '3' }}"
+          # inputs.* are empty on a push event; default sensibly. Validate the
+          # pack path cheaply at 1 sample when triggered by push.
+          n="${{ github.event.inputs.samples || '1' }}"
           idx=$(python3 -c "print(list(range(1, int('${n}')+1)))")
           echo "indices=${idx}" >> "$GITHUB_OUTPUT"
-          echo "samples: ${idx}"
+          echo "pack=${{ github.event.inputs.pack || 'nebi' }}" >> "$GITHUB_OUTPUT"
+          echo "samples: ${idx}, pack: ${{ github.event.inputs.pack || 'nebi' }}"
 
   k3d:
     needs: setup
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         sample: ${{ fromJSON(needs.setup.outputs.indices) }}
+    env:
+      PACK: ${{ needs.setup.outputs.pack }}
+      CLUSTER: bench-k3d-${{ matrix.sample }}
     steps:
       - uses: actions/checkout@v6
+      # Clone the pack repo locally into the runner (extra checkout target), so
+      # add-software-pack references an in-runner path rather than pulling the
+      # chart from github at reconcile time.
+      - name: Checkout nebi pack
+        if: env.PACK == 'nebi'
+        uses: actions/checkout@v6
+        with:
+          repository: nebari-dev/nebari-nebi-pack
+          path: _packs/nebi
       - name: Mark start
         run: echo "BENCH_START=$(date +%s)" >> "$GITHUB_ENV"
-      - name: Start resource monitor
+      - name: Start resource monitor (platform)
         run: ${{ github.workspace }}/tests/bench/resource-monitor.sh start
       - name: Setup Nebari Sandbox (k3d + existing)
+        id: platform
         uses: ./
         with:
           profile: platform
-          cluster-name: bench-k3d-${{ matrix.sample }}
+          cluster-name: ${{ env.CLUSTER }}
           resource-summary: "true"
-      - name: Record metrics
+      - name: Record platform metrics
         if: always()
         run: |
           dur=$(( $(date +%s) - BENCH_START ))
-          BENCH_METRICS_OUT=/tmp/peaks.txt ${{ github.workspace }}/tests/bench/resource-monitor.sh stop "k3d sample ${{ matrix.sample }}" || true
+          BENCH_METRICS_OUT=/tmp/peaks.txt ${{ github.workspace }}/tests/bench/resource-monitor.sh stop "k3d platform ${{ matrix.sample }}" || true
           read -r mem load cmem < /tmp/peaks.txt
           mkdir -p metrics
           echo "${dur} ${mem} ${load} ${cmem}" > "metrics/k3d-${{ matrix.sample }}.txt"
           cat "metrics/k3d-${{ matrix.sample }}.txt"
+      # ── nebi pack phase ──────────────────────────────────────────────────
+      - name: Materialize nebi-org-ca
+        if: env.PACK == 'nebi'
+        run: |
+          kubectl config use-context k3d-${{ env.CLUSTER }}
+          ${{ github.workspace }}/tests/bench/setup-nebi-ca.sh
+      - name: Mark pack start + monitor
+        if: env.PACK == 'nebi'
+        run: |
+          echo "PACK_START=$(date +%s)" >> "$GITHUB_ENV"
+          ${{ github.workspace }}/tests/bench/resource-monitor.sh start
+      - name: Add nebi pack
+        if: env.PACK == 'nebi'
+        uses: ./add-software-pack
+        with:
+          gitops-dir: ${{ steps.platform.outputs.gitops-dir }}
+          app-name: nebi-pack
+          chart-source: ${{ github.workspace }}/_packs/nebi
+          application-manifest: ${{ github.workspace }}/tests/bench/nebi-pack-application.yaml.tmpl
+          wait-healthy: "true"
+          wait-timeout: "8m"
+      - name: Record pack metrics
+        if: always() && env.PACK == 'nebi'
+        run: |
+          dur=$(( $(date +%s) - PACK_START ))
+          BENCH_METRICS_OUT=/tmp/pack.txt ${{ github.workspace }}/tests/bench/resource-monitor.sh stop "k3d nebi-pack ${{ matrix.sample }}" || true
+          read -r mem load cmem < /tmp/pack.txt
+          printf ' %s %s %s %s\n' "${dur}" "${mem}" "${load}" "${cmem}" >> "metrics/k3d-${{ matrix.sample }}.txt"
+          cat "metrics/k3d-${{ matrix.sample }}.txt"
       - uses: actions/upload-artifact@v5
+        if: always()
         with:
           name: bench-k3d-${{ matrix.sample }}
           path: metrics/
       - name: Cleanup
         if: always()
-        run: k3d cluster delete bench-k3d-${{ matrix.sample }} 2>/dev/null || true
+        run: k3d cluster delete ${{ env.CLUSTER }} 2>/dev/null || true
 
   kind:
     needs: setup
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         sample: ${{ fromJSON(needs.setup.outputs.indices) }}
+    env:
+      PACK: ${{ needs.setup.outputs.pack }}
     steps:
       - uses: actions/checkout@v6
+      - name: Checkout nebi pack
+        if: env.PACK == 'nebi'
+        uses: actions/checkout@v6
+        with:
+          repository: nebari-dev/nebari-nebi-pack
+          path: _packs/nebi
       - name: Install nic (latest)
         env:
           NIC_VERSION: latest
@@ -99,7 +159,7 @@ jobs:
           EOF
       - name: Mark start
         run: echo "BENCH_START=$(date +%s)" >> "$GITHUB_ENV"
-      - name: Start resource monitor
+      - name: Start resource monitor (platform)
         run: ${{ github.workspace }}/tests/bench/resource-monitor.sh start
       - name: Deploy platform (kind + local)
         run: nic deploy -f /tmp/nic-local.yaml --timeout 15m
@@ -112,16 +172,49 @@ jobs:
           DOMAIN=nebari.local "${GITHUB_WORKSPACE}/scripts/setup-in-cluster-dns.sh" || true
           CLUSTER_NAME=nebari-kind-bench "${GITHUB_WORKSPACE}/scripts/publish-ca.sh" || true
           python3 "${GITHUB_WORKSPACE}/scripts/resource-summary.py" || true
-      - name: Record metrics
+      - name: Record platform metrics
         if: always()
         run: |
           dur=$(( $(date +%s) - BENCH_START ))
-          BENCH_METRICS_OUT=/tmp/peaks.txt ${{ github.workspace }}/tests/bench/resource-monitor.sh stop "kind sample ${{ matrix.sample }}" || true
+          BENCH_METRICS_OUT=/tmp/peaks.txt ${{ github.workspace }}/tests/bench/resource-monitor.sh stop "kind platform ${{ matrix.sample }}" || true
           read -r mem load cmem < /tmp/peaks.txt
           mkdir -p metrics
           echo "${dur} ${mem} ${load} ${cmem}" > "metrics/kind-${{ matrix.sample }}.txt"
           cat "metrics/kind-${{ matrix.sample }}.txt"
+      # ── nebi pack phase ──────────────────────────────────────────────────
+      - name: Materialize nebi-org-ca
+        if: env.PACK == 'nebi'
+        run: |
+          kubectl config use-context kind-nebari-kind-bench
+          ${{ github.workspace }}/tests/bench/setup-nebi-ca.sh
+      - name: Mark pack start + monitor
+        if: env.PACK == 'nebi'
+        run: |
+          # env.HOME does not resolve in a `with:` expression, so stage the
+          # gitops path into $GITHUB_ENV for the uses step below.
+          echo "GITOPS_DIR=${HOME}/.nic/gitops/nebari-kind-bench" >> "$GITHUB_ENV"
+          echo "PACK_START=$(date +%s)" >> "$GITHUB_ENV"
+          ${{ github.workspace }}/tests/bench/resource-monitor.sh start
+      - name: Add nebi pack
+        if: env.PACK == 'nebi'
+        uses: ./add-software-pack
+        with:
+          gitops-dir: ${{ env.GITOPS_DIR }}
+          app-name: nebi-pack
+          chart-source: ${{ github.workspace }}/_packs/nebi
+          application-manifest: ${{ github.workspace }}/tests/bench/nebi-pack-application.yaml.tmpl
+          wait-healthy: "true"
+          wait-timeout: "8m"
+      - name: Record pack metrics
+        if: always() && env.PACK == 'nebi'
+        run: |
+          dur=$(( $(date +%s) - PACK_START ))
+          BENCH_METRICS_OUT=/tmp/pack.txt ${{ github.workspace }}/tests/bench/resource-monitor.sh stop "kind nebi-pack ${{ matrix.sample }}" || true
+          read -r mem load cmem < /tmp/pack.txt
+          printf ' %s %s %s %s\n' "${dur}" "${mem}" "${load}" "${cmem}" >> "metrics/kind-${{ matrix.sample }}.txt"
+          cat "metrics/kind-${{ matrix.sample }}.txt"
       - uses: actions/upload-artifact@v5
+        if: always()
         with:
           name: bench-kind-${{ matrix.sample }}
           path: metrics/
@@ -143,25 +236,45 @@ jobs:
         run: |
           python3 - <<'PY'
           import glob, statistics, os
+          # A row is 4 numbers (platform only) or 8 (platform + nebi pack window):
+          #   plat_dur plat_mem plat_load plat_cmem [pack_dur pack_mem pack_load pack_cmem]
           def load(provider):
               rows=[]
               for f in glob.glob(f"metrics/{provider}-*.txt"):
                   parts=open(f).read().split()
-                  if len(parts)==4:
+                  if len(parts) in (4,8):
                       rows.append([float(x) for x in parts])
               return rows
           def med(rows, col):
-              vals=[r[col] for r in rows]
+              vals=[r[col] for r in rows if len(r)>col]
               return round(statistics.median(vals),1) if vals else None
-          cols=["deploy s","peak host mem MB","peak load1","peak container mem MB"]
           out=os.environ.get("GITHUB_STEP_SUMMARY","/dev/stdout")
+          k3d=load("k3d"); kind=load("kind")
+          plat_cols=["deploy s","peak host mem MB","peak load1","peak container mem MB"]
+          pack_cols=["pack install s","peak host mem MB","peak load1","peak container mem MB"]
           with open(out,"a") as w:
               w.write("## Provider benchmark medians (k3d vs kind)\n\n")
-              k3d=load("k3d"); kind=load("kind")
               w.write(f"Samples: k3d={len(k3d)}, kind={len(kind)}\n\n")
+              w.write("### Platform (foundational)\n\n")
               w.write("| metric | k3d / existing | kind / local |\n|---|---|---|\n")
-              for i,name in enumerate(cols):
+              for i,name in enumerate(plat_cols):
                   w.write(f"| {name} | {med(k3d,i)} | {med(kind,i)} |\n")
-              w.write("\nDeploy time = mark-start (before provisioning) to platform+parity up. Peaks sampled every ~3s.\n")
+              has_pack = any(len(r)==8 for r in k3d+kind)
+              if has_pack:
+                  w.write("\n### + nebi pack (real utilization)\n\n")
+                  w.write("| metric | k3d / existing | kind / local |\n|---|---|---|\n")
+                  for j,name in enumerate(pack_cols):
+                      w.write(f"| {name} | {med(k3d,4+j)} | {med(kind,4+j)} |\n")
+                  # Peak deltas: pack-window peak minus platform-window peak.
+                  w.write("\n### nebi pack delta (pack window peak - platform window peak)\n\n")
+                  w.write("| metric | k3d / existing | kind / local |\n|---|---|---|\n")
+                  for label,idx in [("host mem MB",1),("load1",2),("container mem MB",3)]:
+                      def d(rows):
+                          v=[r[4+idx]-r[idx] for r in rows if len(r)==8]
+                          return round(statistics.median(v),1) if v else None
+                      w.write(f"| {label} | {d(k3d)} | {d(kind)} |\n")
+              w.write("\nPlatform deploy time = mark-start to platform+parity up. "
+                      "Pack install s = add-software-pack (register + wait Healthy). "
+                      "Peaks sampled every ~3s within each window.\n")
           print("done")
           PY

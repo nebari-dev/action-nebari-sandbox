@@ -1,0 +1,74 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: nebi-pack
+  namespace: argocd
+spec:
+  # v0.10.0 consumer project: destinations any-namespace, sourceRepos include
+  # the platform gitops repo. (The live foundational deploy uses `foundational`;
+  # a consumer-installed pack belongs in nebari-apps.)
+  project: nebari-apps
+  # add-software-pack copied the cloned nebari-nebi-pack chart into
+  # ${GITOPS_DIR}/nebi-pack; ArgoCD resolves it from the local file:// repo,
+  # so the benchmark exercises the "clone locally, reference in-runner" model
+  # rather than pulling the chart from github at reconcile time.
+  source:
+    repoURL: "file://${GITOPS_DIR}"
+    targetRevision: HEAD
+    path: nebi-pack
+    helm:
+      values: |
+        # Released/known-good nebi SERVER build.
+        image:
+          repository: quay.io/nebari/nebi
+          tag: "sha-be3187c"
+          pullPolicy: IfNotPresent
+
+        log:
+          level: debug
+
+        # Cluster CA bundle (system CAs + the self-signed *.nebari.local gateway
+        # cert) so the nebi server's OIDC verifier can fetch JWKS from
+        # https://keycloak.nebari.local without an x509 error. The benchmark job
+        # materializes this configmap from nebari-gateway-tls before registering.
+        orgCABundle:
+          configMapName: "nebi-org-ca"
+
+        nebariapp:
+          enabled: true
+          hostname: nebi.nebari.local
+          routing:
+            publicRoutes:
+              - pathPrefix: /api/
+                pathType: PathPrefix
+              - pathPrefix: /docs/
+                pathType: PathPrefix
+          auth:
+            tokenExchange:
+              enabled: true
+          landingPage:
+            enabled: true
+            healthCheck:
+              enabled: true
+              path: "/api/v1/health"
+              intervalSeconds: 30
+              timeoutSeconds: 5
+
+        # Server-side OIDC verifier. Client secret is provisioned by the
+        # nebari-operator (ships with NIC) into the named Secret when it
+        # reconciles the NebariApp CR that nebariapp.enabled creates.
+        auth:
+          oidc:
+            enabled: true
+            issuerURL: "https://keycloak.nebari.local/realms/nebari"
+            clientID: "nebari-system-nebi-pack-nebari-nebi-pack"
+            clientSecretName: "nebi-pack-nebari-nebi-pack-oidc-client"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: nebari-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
