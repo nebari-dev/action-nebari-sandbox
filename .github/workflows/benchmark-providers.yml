@@ -21,7 +21,9 @@ on:
   # workflow is on the default branch (workflow_dispatch requires that). Remove.
   push:
     branches: [test/benchmark-kind-local]
-    paths: ['.github/workflows/benchmark-providers.yml']
+    paths:
+      - '.github/workflows/benchmark-providers.yml'
+      - 'tests/bench/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

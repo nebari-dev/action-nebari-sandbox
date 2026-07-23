@@ -6,12 +6,15 @@
 # error. In a real deploy an operator/admin seeds this; here we build it inline.
 #
 # Env:
-#   NAMESPACE   target namespace (default nebari-system)
-#   GATEWAY_TLS_SECRET  gateway TLS secret name (default nebari-gateway-tls)
+#   NAMESPACE            target namespace for the configmap (default nebari-system)
+#   GATEWAY_TLS_SECRET   gateway TLS secret name (default nebari-gateway-tls)
+#   GATEWAY_TLS_NAMESPACE  where that secret lives (default envoy-gateway-system)
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-nebari-system}"
 GATEWAY_TLS_SECRET="${GATEWAY_TLS_SECRET:-nebari-gateway-tls}"
+# NIC's Certificate lives in envoy-gateway-system, not the pack's namespace.
+GATEWAY_TLS_NAMESPACE="${GATEWAY_TLS_NAMESPACE:-envoy-gateway-system}"
 SYSTEM_CA="${SYSTEM_CA:-/etc/ssl/certs/ca-certificates.crt}"
 
 workdir="$(mktemp -d)"
@@ -27,14 +30,14 @@ else
 fi
 
 # Append the gateway CA (ca.crt if the secret carries one, else the leaf cert).
-gw_ca="$(kubectl get secret "${GATEWAY_TLS_SECRET}" -n "${NAMESPACE}" \
+gw_ca="$(kubectl get secret "${GATEWAY_TLS_SECRET}" -n "${GATEWAY_TLS_NAMESPACE}" \
   -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)"
 if [[ -z "${gw_ca}" ]]; then
-  gw_ca="$(kubectl get secret "${GATEWAY_TLS_SECRET}" -n "${NAMESPACE}" \
+  gw_ca="$(kubectl get secret "${GATEWAY_TLS_SECRET}" -n "${GATEWAY_TLS_NAMESPACE}" \
     -o jsonpath='{.data.tls\.crt}' 2>/dev/null || true)"
 fi
 if [[ -z "${gw_ca}" ]]; then
-  echo "::error::could not read ca.crt or tls.crt from secret ${GATEWAY_TLS_SECRET} in ${NAMESPACE}"
+  echo "::error::could not read ca.crt or tls.crt from secret ${GATEWAY_TLS_SECRET} in ${GATEWAY_TLS_NAMESPACE}"
   exit 1
 fi
 printf '%s' "${gw_ca}" | base64 -d >> "${bundle}"
