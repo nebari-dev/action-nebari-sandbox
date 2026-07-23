@@ -107,8 +107,14 @@ jobs:
           app-name: nebi-pack
           chart-source: ${{ github.workspace }}/_packs/nebi
           application-manifest: ${{ github.workspace }}/tests/bench/nebi-pack-application.yaml.tmpl
-          wait-healthy: "true"
+          # Don't gate on ArgoCD health: a fresh Application flips Healthy before
+          # its pods exist (empty -> Healthy), which would close the resource
+          # window before the pack starts. We wait on real pod readiness below.
+          wait-healthy: "false"
           wait-timeout: "8m"
+      - name: Wait for nebi pack pods (real utilization)
+        if: env.PACK == 'nebi'
+        run: ${{ github.workspace }}/tests/bench/wait-pack-ready.sh
       - name: Record pack metrics
         if: always() && env.PACK == 'nebi'
         run: |
@@ -205,8 +211,12 @@ jobs:
           app-name: nebi-pack
           chart-source: ${{ github.workspace }}/_packs/nebi
           application-manifest: ${{ github.workspace }}/tests/bench/nebi-pack-application.yaml.tmpl
-          wait-healthy: "true"
+          # See k3d job: gate on real pod readiness, not premature ArgoCD health.
+          wait-healthy: "false"
           wait-timeout: "8m"
+      - name: Wait for nebi pack pods (real utilization)
+        if: env.PACK == 'nebi'
+        run: ${{ github.workspace }}/tests/bench/wait-pack-ready.sh
       - name: Record pack metrics
         if: always() && env.PACK == 'nebi'
         run: |
