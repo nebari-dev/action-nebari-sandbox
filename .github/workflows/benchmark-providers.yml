@@ -89,6 +89,17 @@ jobs:
           echo "${dur} ${mem} ${load} ${cmem}" > "metrics/k3d-${{ matrix.sample }}.txt"
           cat "metrics/k3d-${{ matrix.sample }}.txt"
       # ── nebi pack phase ──────────────────────────────────────────────────
+      # Steady-state platform baseline: the deploy-window peak above includes a
+      # transient startup spike that dwarfs the pack's resident cost, so measure
+      # a quiet platform window as the delta baseline.
+      - name: Platform steady-state baseline
+        if: env.PACK == 'nebi'
+        run: |
+          ${{ github.workspace }}/tests/bench/resource-monitor.sh start
+          sleep 60
+          BENCH_METRICS_OUT=/tmp/steady.txt ${{ github.workspace }}/tests/bench/resource-monitor.sh stop "k3d platform-steady ${{ matrix.sample }}" || true
+          read -r smem sload scmem < /tmp/steady.txt
+          printf ' %s %s %s' "${smem}" "${sload}" "${scmem}" >> "metrics/k3d-${{ matrix.sample }}.txt"
       - name: Materialize nebi-org-ca
         if: env.PACK == 'nebi'
         run: |
@@ -190,6 +201,14 @@ jobs:
           echo "${dur} ${mem} ${load} ${cmem}" > "metrics/kind-${{ matrix.sample }}.txt"
           cat "metrics/kind-${{ matrix.sample }}.txt"
       # ── nebi pack phase ──────────────────────────────────────────────────
+      - name: Platform steady-state baseline
+        if: env.PACK == 'nebi'
+        run: |
+          ${{ github.workspace }}/tests/bench/resource-monitor.sh start
+          sleep 60
+          BENCH_METRICS_OUT=/tmp/steady.txt ${{ github.workspace }}/tests/bench/resource-monitor.sh stop "kind platform-steady ${{ matrix.sample }}" || true
+          read -r smem sload scmem < /tmp/steady.txt
+          printf ' %s %s %s' "${smem}" "${sload}" "${scmem}" >> "metrics/kind-${{ matrix.sample }}.txt"
       - name: Materialize nebi-org-ca
         if: env.PACK == 'nebi'
         run: |
@@ -248,45 +267,49 @@ jobs:
         run: |
           python3 - <<'PY'
           import glob, statistics, os
-          # A row is 4 numbers (platform only) or 8 (platform + nebi pack window):
-          #   plat_dur plat_mem plat_load plat_cmem [pack_dur pack_mem pack_load pack_cmem]
+          # A row is 4 numbers (platform only) or 11 (platform + steady baseline
+          # + nebi pack window):
+          #   0 plat_dur 1 plat_mem 2 plat_load 3 plat_cmem
+          #   4 steady_mem 5 steady_load 6 steady_cmem
+          #   7 pack_dur 8 pack_mem 9 pack_load 10 pack_cmem
           def load(provider):
               rows=[]
               for f in glob.glob(f"metrics/{provider}-*.txt"):
                   parts=open(f).read().split()
-                  if len(parts) in (4,8):
+                  if len(parts) in (4,11):
                       rows.append([float(x) for x in parts])
               return rows
           def med(rows, col):
               vals=[r[col] for r in rows if len(r)>col]
               return round(statistics.median(vals),1) if vals else None
+          def med_delta(rows, a, b):
+              vals=[r[a]-r[b] for r in rows if len(r)>max(a,b)]
+              return round(statistics.median(vals),1) if vals else None
           out=os.environ.get("GITHUB_STEP_SUMMARY","/dev/stdout")
           k3d=load("k3d"); kind=load("kind")
           plat_cols=["deploy s","peak host mem MB","peak load1","peak container mem MB"]
-          pack_cols=["pack install s","peak host mem MB","peak load1","peak container mem MB"]
           with open(out,"a") as w:
               w.write("## Provider benchmark medians (k3d vs kind)\n\n")
               w.write(f"Samples: k3d={len(k3d)}, kind={len(kind)}\n\n")
-              w.write("### Platform (foundational)\n\n")
+              w.write("### Platform (foundational) - deploy window\n\n")
               w.write("| metric | k3d / existing | kind / local |\n|---|---|---|\n")
               for i,name in enumerate(plat_cols):
                   w.write(f"| {name} | {med(k3d,i)} | {med(kind,i)} |\n")
-              has_pack = any(len(r)==8 for r in k3d+kind)
+              has_pack = any(len(r)==11 for r in k3d+kind)
               if has_pack:
-                  w.write("\n### + nebi pack (real utilization)\n\n")
+                  w.write("\n### nebi pack - real utilization (steady baseline vs +pack)\n\n")
+                  w.write("| metric | k3d platform | k3d +pack | kind platform | kind +pack |\n"
+                          "|---|---|---|---|---|\n")
+                  # steady_mem=4 pack_mem=8 ; steady_load=5 pack_load=9 ; steady_cmem=6 pack_cmem=10
+                  for label,s,p in [("host mem MB",4,8),("load1",5,9),("container mem MB",6,10)]:
+                      w.write(f"| {label} | {med(k3d,s)} | {med(k3d,p)} | {med(kind,s)} | {med(kind,p)} |\n")
+                  w.write(f"| pack install s | - | {med(k3d,7)} | - | {med(kind,7)} |\n")
+                  w.write("\n### nebi pack delta (+pack peak - steady platform peak)\n\n")
                   w.write("| metric | k3d / existing | kind / local |\n|---|---|---|\n")
-                  for j,name in enumerate(pack_cols):
-                      w.write(f"| {name} | {med(k3d,4+j)} | {med(kind,4+j)} |\n")
-                  # Peak deltas: pack-window peak minus platform-window peak.
-                  w.write("\n### nebi pack delta (pack window peak - platform window peak)\n\n")
-                  w.write("| metric | k3d / existing | kind / local |\n|---|---|---|\n")
-                  for label,idx in [("host mem MB",1),("load1",2),("container mem MB",3)]:
-                      def d(rows):
-                          v=[r[4+idx]-r[idx] for r in rows if len(r)==8]
-                          return round(statistics.median(v),1) if v else None
-                      w.write(f"| {label} | {d(k3d)} | {d(kind)} |\n")
-              w.write("\nPlatform deploy time = mark-start to platform+parity up. "
-                      "Pack install s = add-software-pack (register + wait Healthy). "
-                      "Peaks sampled every ~3s within each window.\n")
+                  for label,p,s in [("host mem MB",8,4),("load1",9,5),("container mem MB",10,6)]:
+                      w.write(f"| {label} | {med_delta(k3d,p,s)} | {med_delta(kind,p,s)} |\n")
+              w.write("\nDeploy s = mark-start to platform+parity up (window peak includes startup transient). "
+                      "Steady baseline + pack window are each sampled after a 60s settle. "
+                      "Pack install s = register to pack pods Ready + settle. Peaks sampled every ~3s.\n")
           print("done")
           PY
