@@ -68,6 +68,13 @@ jobs:
         with:
           repository: nebari-dev/nebari-nebi-pack
           path: _packs/nebi
+      # Drop the clone's .git: add-software-pack copies chart-source verbatim and
+      # commits it; a nested .git would be recorded as an embedded gitlink, so the
+      # chart files (Chart.yaml included) never land in the gitops tree and ArgoCD
+      # cannot render the chart.
+      - name: Strip pack clone .git
+        if: env.PACK == 'nebi'
+        run: rm -rf "${{ github.workspace }}/_packs/nebi/.git"
       - name: Mark start
         run: echo "BENCH_START=$(date +%s)" >> "$GITHUB_ENV"
       - name: Start resource monitor (platform)
@@ -161,6 +168,13 @@ jobs:
         with:
           repository: nebari-dev/nebari-nebi-pack
           path: _packs/nebi
+      # Drop the clone's .git: add-software-pack copies chart-source verbatim and
+      # commits it; a nested .git would be recorded as an embedded gitlink, so the
+      # chart files (Chart.yaml included) never land in the gitops tree and ArgoCD
+      # cannot render the chart.
+      - name: Strip pack clone .git
+        if: env.PACK == 'nebi'
+        run: rm -rf "${{ github.workspace }}/_packs/nebi/.git"
       - name: Install nic (latest)
         env:
           NIC_VERSION: latest
