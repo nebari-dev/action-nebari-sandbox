@@ -1,55 +1,35 @@
 name: "Setup Nebari Sandbox"
-description: "Reusable GitHub Action to bootstrap a local Kubernetes test environment for Nebari component testing"
+description: "Reusable GitHub Action to bootstrap a local Nebari platform (kind, via NIC's local provider) for component testing"
 
 inputs:
-  profile:
-    description: >
-      Deployment profile.
-      - cluster-only: k3d cluster + kubeconfig, no NIC.
-      - platform: full foundational stack via NIC/ArgoCD.
-      See the Profiles table in the README for current median wall-clock
-      durations (auto-refreshed via the benchmark-timings workflow).
-    required: false
-    default: "cluster-only"
   cluster-name:
-    description: "Name for the k3d cluster (must be unique on the runner)"
+    description: >
+      Name for the deployment. Used as NIC's `project_name` and as the kind
+      cluster name (context `kind-<cluster-name>`). Must be unique on the runner.
     required: false
     default: "nebari-test"
-  k8s-version:
-    description: "Kubernetes version to use (maps to a k3d image tag)"
-    required: false
-    default: "1.32.4"
-  k3d-version:
-    description: "k3d version to install"
-    required: false
-    default: "5.8.3"
   resource-summary:
     description: >
-      When 'true' (and profile is 'platform'), append a markdown table of
-      pod resource requests/limits and node allocatable capacity to
-      $GITHUB_STEP_SUMMARY after the platform stack is up. Useful for
-      tracking minimum-spec requirements as the foundational stack evolves.
+      When 'true', append a markdown table of pod resource requests/limits and
+      node allocatable capacity to $GITHUB_STEP_SUMMARY after the platform stack
+      is up. Useful for tracking minimum-spec requirements as the foundational
+      stack evolves.
     required: false
     default: "false"
   timing-report:
     description: >
-      When 'true', record wall-clock durations for key phases (k3s image pull,
-      k3d cluster create, nic deploy, etc.) and append a markdown timing table
-      to $GITHUB_STEP_SUMMARY. Works with both profiles. Intended for benchmarking
-      and profiling CI runs; has no effect on normal operation when 'false'.
+      When 'true', record wall-clock durations for key phases (nic deploy, etc.)
+      and append a markdown timing table to $GITHUB_STEP_SUMMARY. Intended for
+      benchmarking and profiling CI runs; no effect when 'false'.
     required: false
     default: "false"
   nic-version:
     description: >
-      NIC version to install (platform profile only). Defaults to v0.12.0, the
-      last NIC release this action's existing-cluster + file:// GitOps setup is
-      compatible with: NIC v0.13.0 removed that combination, so newer releases
-      fail the platform deploy until the action migrates to the kind/local
-      provider (tracked in #97).
-      - 'vX.Y.Z' (default 'v0.12.0'): downloads that release's pre-built binary.
-        Keep at <= v0.12.0 until the kind migration lands.
-      - 'latest': downloads the latest released pre-built binary. Currently
-        resolves to a NIC that is incompatible with this action (see above).
+      NIC version to install. Requires NIC v0.13.0 or newer: this action uses
+      NIC's `local` (kind) cluster provider and `local` repository provider,
+      which the v0.13.0 repository-provider split introduced.
+      - 'latest' (default): downloads the latest released pre-built binary.
+      - 'vX.Y.Z': downloads that release's pre-built binary (>= v0.13.0).
       - '.': builds from $GITHUB_WORKSPACE (use when the consumer has the
         NIC repo checked out, e.g. NIC's own self-tests).
       - Any other string (branch name, tag, commit sha): clones that ref
@@ -58,45 +38,34 @@ inputs:
       Ignored when `nic-binary` is set. Leave at the default if you use
       `nic-binary`; setting both to meaningful values is an error.
     required: false
-    default: "v0.12.0"
+    default: "latest"
   nic-binary:
     description: >
-      Path to a pre-built `nic` binary on the runner (platform profile only).
-      When set, the action installs it directly and ignores `nic-version` — use
-      this to build `nic` once in an earlier job (e.g. upload/download it as an
-      artifact) and reuse it across per-provider or matrix jobs instead of
-      rebuilding from source each time. Mutually exclusive with a non-default
-      `nic-version`.
+      Path to a pre-built `nic` binary on the runner. When set, the action
+      installs it directly and ignores `nic-version` — use this to build `nic`
+      once in an earlier job (e.g. upload/download it as an artifact) and reuse
+      it across per-provider or matrix jobs instead of rebuilding from source
+      each time. Mutually exclusive with a non-default `nic-version`.
     required: false
     default: ""
   nic-config:
     description: >
-      Path to a consumer-supplied NIC config file (platform profile only).
-      When set, the action skips its built-in config template and passes
-      this file to `nic deploy -f` directly. The consumer is responsible
-      for matching the rest of the action's setup — two fields in
-      particular must point at what the action actually provisioned:
-
-        - `cluster.existing.context` — derived as `k3d-<cluster-name>`
-          (e.g. `k3d-nebari-test` for the default cluster-name). The action
-          provisions the k3d cluster itself, so NIC connects to it via the
-          `existing` provider rather than provisioning one.
-        - `git_repository.url` — derived as
-          `file:///tmp/nebari-gitops-<cluster-name>` (a hostPath mount
-          into the k3d node so ArgoCD's repo-server can read it).
-
-      The action does not validate these; NIC's config parser will surface
-      real mismatches at deploy time. When unset (default), the action
-      generates its standard config as before.
+      Path to a consumer-supplied NIC config file. When set, the action skips
+      its built-in config template and passes this file to `nic deploy -f`
+      directly. For the action's outputs to resolve, the config's `project_name`
+      must equal `cluster-name`, and it must use the `local` cluster provider
+      (`cluster.local`) and the `local` repository provider (`repository.local`),
+      which is what the action provisions. The action does not validate this;
+      NIC's config parser surfaces real mismatches at deploy time.
     required: false
     default: ""
   in-cluster-dns:
     description: >
-      When 'true' (default) and profile is 'platform', add a CoreDNS entry so
-      the external Nebari hostnames (`*.<domain>`, e.g. `keycloak.nebari.local`)
-      resolve to the gateway from INSIDE the cluster. Required for consumer pods
-      doing server-side OIDC: Keycloak's discovery document advertises the
-      external issuer, so a pod must reach that same hostname (see #69). Only
+      When 'true' (default), add a CoreDNS entry so the external Nebari
+      hostnames (`*.<domain>`, e.g. `keycloak.nebari.local`) resolve to the
+      gateway from INSIDE the cluster. Required for consumer pods doing
+      server-side OIDC: Keycloak's discovery document advertises the external
+      issuer, so a pod must reach that same hostname (see #69). Only
       `keycloak.<domain>`, `argocd.<domain>`, and `<domain>` have valid TLS SANs.
       Set 'false' if you manage in-cluster DNS yourself.
     required: false
@@ -104,107 +73,83 @@ inputs:
 
 outputs:
   kubeconfig:
-    description: "Path to the kubeconfig file for the created cluster"
-    value: ${{ steps.create-cluster.outputs.kubeconfig }}
+    description: "Path to the kubeconfig file for the created kind cluster."
+    value: ${{ steps.deploy.outputs.kubeconfig }}
   cluster-name:
-    description: "Name of the created k3d cluster"
-    value: ${{ steps.create-cluster.outputs.cluster-name }}
+    description: "Name of the deployment (NIC project_name; kind context is `kind-<cluster-name>`)."
+    value: ${{ steps.deploy.outputs.cluster-name }}
   gitops-dir:
-    description: "Local GitOps directory mounted into the cluster (platform profile only)"
-    value: ${{ steps.create-cluster.outputs.gitops-dir }}
+    description: "Local GitOps directory NIC created and mounted into the cluster (~/.nic/gitops/<cluster-name>)."
+    value: ${{ steps.deploy.outputs.gitops-dir }}
   keycloak-admin-password:
-    description: "Keycloak admin password for the *master* realm (platform profile only). Use `keycloak-realm-admin-password` for the nebari realm."
+    description: "Keycloak admin password for the *master* realm. Use `keycloak-realm-admin-password` for the nebari realm."
     value: ${{ steps.extract-outputs.outputs.keycloak-admin-password }}
   keycloak-realm-admin-password:
     description: >
-      Keycloak admin password for the *nebari* realm (platform profile only).
-      Provisioned asynchronously by NIC's realm-setup PostSync hook after
-      Keycloak becomes Ready, so this output may be empty if the secret has
-      not materialized by the time `extract-outputs.sh` polls (see #27 for the
-      planned wait-for-realm input). When empty, consumers can fall back to
-      reading the `nebari-realm-admin-credentials` secret in the `keycloak`
-      namespace after their own wait-for-realm step.
+      Keycloak admin password for the *nebari* realm. Provisioned asynchronously
+      by NIC's realm-setup PostSync hook after Keycloak becomes Ready, so this
+      may be empty if the secret has not materialized by the time
+      extract-outputs.sh polls (see #27). When empty, read the
+      `nebari-realm-admin-credentials` secret in the `keycloak` namespace after
+      your own wait-for-realm step.
     value: ${{ steps.extract-outputs.outputs.keycloak-realm-admin-password }}
   argocd-admin-password:
-    description: "ArgoCD admin password (platform profile only)"
+    description: "ArgoCD admin password."
     value: ${{ steps.extract-outputs.outputs.argocd-admin-password }}
   gateway-ip:
-    description: "Gateway LoadBalancer IP (platform profile only), assigned by k3d's servicelb (klipper)."
+    description: "Gateway LoadBalancer IP, assigned by MetalLB from the kind Docker network pool (routable from the Linux runner)."
     value: ${{ steps.extract-outputs.outputs.gateway-ip }}
   keycloak-issuer-url:
     description: >
-      External public issuer URL for the Keycloak deployment (platform profile
-      only), e.g. `https://keycloak.nebari.local`. Derived from the `domain`
-      field in the NIC config NIC wrote to the gitops repo, matching NIC's own
-      formula. Useful for JWT `iss` claim validation in consumer e2e tests.
+      External public issuer URL for the Keycloak deployment, e.g.
+      `https://keycloak.nebari.local`. Derived from the `domain` field in the
+      NIC config, matching NIC's own formula. Useful for JWT `iss` claim
+      validation in consumer e2e tests.
     value: ${{ steps.extract-outputs.outputs.keycloak-issuer-url }}
   domain:
     description: >
-      The Nebari domain the platform was deployed with (platform profile only),
-      e.g. `nebari.local`. Read from the NIC config in the gitops repo. Handy
-      for building the hostnames consumers route to (`keycloak.<domain>`, etc.).
+      The Nebari domain the platform was deployed with, e.g. `nebari.local`.
+      Read from the NIC config in the gitops repo.
     value: ${{ steps.extract-outputs.outputs.domain }}
   ca-cert-path:
     description: >
-      Path on the runner to the sandbox gateway's CA certificate (platform
-      profile only), extracted from the `nebari-gateway-tls` secret. Use it for
-      runner-side `curl --cacert`, or to build a ConfigMap/Secret your pods
-      mount so they trust `https://<domain>` (the gateway serves a selfsigned
-      cert). The same CA is published in-cluster as ConfigMap
-      `nebari-sandbox-ca` (key `ca.crt`) in the `kube-public` namespace. Empty
-      if the gateway TLS secret could not be read (see #69).
+      Path on the runner to the sandbox gateway's CA certificate, extracted from
+      the `nebari-gateway-tls` secret. Use it for runner-side `curl --cacert`, or
+      to build a ConfigMap/Secret your pods mount so they trust `https://<domain>`
+      (the gateway serves a selfsigned cert). The same CA is published in-cluster
+      as ConfigMap `nebari-sandbox-ca` (key `ca.crt`) in `kube-public`. Empty if
+      the gateway TLS secret could not be read (see #69).
     value: ${{ steps.publish-ca.outputs.ca-cert-path }}
 
 runs:
   using: "composite"
   steps:
-    - name: Install k3d
-      shell: bash
-      run: ${{ github.action_path }}/scripts/install-k3d.sh
-      env:
-        K3D_VERSION: ${{ inputs.k3d-version }}
-
-    - name: Create k3d cluster
-      id: create-cluster
-      shell: bash
-      run: ${{ github.action_path }}/scripts/create-cluster.sh
-      env:
-        CLUSTER_NAME: ${{ inputs.cluster-name }}
-        K8S_VERSION: ${{ inputs.k8s-version }}
-        PROFILE: ${{ inputs.profile }}
-
     - name: Install NIC
-      if: inputs.profile == 'platform'
       shell: bash
       run: ${{ github.action_path }}/scripts/install-nic.sh
       env:
         NIC_VERSION: ${{ inputs.nic-version }}
         NIC_BINARY: ${{ inputs.nic-binary }}
-        # Used by install-nic.sh for authenticated GitHub API calls (release
-        # metadata + checksums.txt). Avoids the 60/hr unauthenticated rate
-        # limit, which can bite on self-hosted runners sharing an egress IP.
         GITHUB_TOKEN: ${{ github.token }}
 
     - name: Deploy platform
-      if: inputs.profile == 'platform'
+      id: deploy
       shell: bash
       run: ${{ github.action_path }}/scripts/deploy-platform.sh
       env:
         CLUSTER_NAME: ${{ inputs.cluster-name }}
-        GITOPS_DIR: ${{ steps.create-cluster.outputs.gitops-dir }}
         NEBARI_TIMING_REPORT: ${{ inputs.timing-report }}
         NIC_CONFIG: ${{ inputs.nic-config }}
 
     - name: Extract platform outputs
-      if: inputs.profile == 'platform'
       id: extract-outputs
       shell: bash
       run: ${{ github.action_path }}/scripts/extract-outputs.sh
       env:
-        GITOPS_DIR: ${{ steps.create-cluster.outputs.gitops-dir }}
+        GITOPS_DIR: ${{ steps.deploy.outputs.gitops-dir }}
 
     - name: Set up in-cluster DNS
-      if: inputs.profile == 'platform' && inputs.in-cluster-dns == 'true'
+      if: inputs.in-cluster-dns == 'true'
       shell: bash
       run: ${{ github.action_path }}/scripts/setup-in-cluster-dns.sh
       env:
@@ -212,14 +157,12 @@ runs:
         GATEWAY_IP: ${{ steps.extract-outputs.outputs.gateway-ip }}
 
     - name: Await platform workloads
-      if: inputs.profile == 'platform'
       shell: bash
       run: ${{ github.action_path }}/scripts/wait-platform.sh
       env:
         AWAIT_TIMEOUT: "300"
 
     - name: Publish sandbox CA
-      if: inputs.profile == 'platform'
       id: publish-ca
       shell: bash
       run: ${{ github.action_path }}/scripts/publish-ca.sh
@@ -227,14 +170,14 @@ runs:
         CLUSTER_NAME: ${{ inputs.cluster-name }}
 
     - name: Collect deploy-phase timings
-      if: inputs.profile == 'platform' && inputs.timing-report == 'true'
+      if: inputs.timing-report == 'true'
       shell: bash
       run: python3 ${{ github.action_path }}/scripts/collect-deploy-timings.py
       env:
         CLUSTER_NAME: ${{ inputs.cluster-name }}
 
     - name: Generate resource summary
-      if: inputs.profile == 'platform' && inputs.resource-summary == 'true'
+      if: inputs.resource-summary == 'true'
       shell: bash
       run: python3 ${{ github.action_path }}/scripts/resource-summary.py
 

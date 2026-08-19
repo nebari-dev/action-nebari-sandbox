@@ -41,6 +41,7 @@ case "$1" in
       deployment)
         case "$ns" in
           argocd) echo "argocd-server" ;;
+          metallb-system) echo "metallb-controller" ;;
           cert-manager) echo "cert-manager" ;;
           envoy-gateway-system) echo "envoy-gateway" ;;
         esac

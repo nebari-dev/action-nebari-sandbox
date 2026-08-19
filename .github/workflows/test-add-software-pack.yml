@@ -92,7 +92,6 @@ jobs:
       - uses: ./
         id: sandbox
         with:
-          profile: platform
           cluster-name: test-add-software-pack
 
       - name: Surface KUBECONFIG for the sub-action's wait
