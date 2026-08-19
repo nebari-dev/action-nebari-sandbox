@@ -36,7 +36,6 @@ jobs:
         # the action's auto-template (which would set project_name to the
         # cluster name).
         run: |
-          mkdir -p /tmp/nebari-gitops-test-nic-config
           cat > /tmp/my-nic-config.yaml <<'EOF'
           project_name: custom-test-project
           domain: nebari.local
@@ -64,7 +63,9 @@ jobs:
         # If our supplied config was used, project_name is the sentinel.
         run: |
           set -euo pipefail
-          REPO_CONFIG="/tmp/nebari-gitops-test-nic-config/nic-config.yaml"
+          # NIC (local repository provider) writes the repo config under its
+          # default gitops path, which the action exposes as gitops-dir.
+          REPO_CONFIG="${{ steps.sandbox.outputs.gitops-dir }}/nic-config.yaml"
           [ -f "${REPO_CONFIG}" ] || { echo "::error::NIC did not write ${REPO_CONFIG}"; exit 1; }
           echo "--- repo-side NIC config ---"
           cat "${REPO_CONFIG}"
