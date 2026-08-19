@@ -23,15 +23,17 @@ KEYCLOAK_TIMEOUT="${KEYCLOAK_AWAIT_TIMEOUT:-600}"
 (( KEYCLOAK_TIMEOUT < TIMEOUT )) && KEYCLOAK_TIMEOUT="${TIMEOUT}"
 
 # Namespace order follows dependency: ArgoCD first (it drives the rest),
-# then infra (cert-manager, Envoy), then workloads (Keycloak). MetalLB is no
-# longer in the list — under the `existing` provider NIC doesn't deploy it;
-# k3d's built-in servicelb (klipper) provides LoadBalancer IPs instead.
+# then infra (MetalLB, cert-manager, Envoy), then workloads (Keycloak). NIC's
+# `local` provider deploys MetalLB (kind has no built-in LoadBalancer), so it
+# is back in the await set; its speakers restart legitimately while waiting for
+# the memberlist Secret during bootstrap, hence a generous budget.
 # Keycloak's slow JVM boot also crash-restarts a few times before it settles,
 # so the shared restart budget trips (6 > 5) even when the pod ends up Ready
 # (#79). Same root cause as the timeout headroom above — give it its own,
 # overridable budget rather than failing a healthy cluster on the restart count.
 declare -A MAX_RESTARTS=(
   [argocd]=3
+  [metallb-system]="${METALLB_MAX_RESTARTS:-10}"
   [cert-manager]=3
   [envoy-gateway-system]=3
   [keycloak]="${KEYCLOAK_MAX_RESTARTS:-8}"
@@ -40,6 +42,7 @@ declare -A MAX_RESTARTS=(
 # Per-namespace readiness timeout. All share the base except Keycloak (above).
 declare -A NS_TIMEOUT=(
   [argocd]="${TIMEOUT}"
+  [metallb-system]="${TIMEOUT}"
   [cert-manager]="${TIMEOUT}"
   [envoy-gateway-system]="${TIMEOUT}"
   [keycloak]="${KEYCLOAK_TIMEOUT}"
@@ -64,7 +67,7 @@ if ! kubectl get nodes --request-timeout=20s >/dev/null 2>&1; then
   exit 1
 fi
 
-for ns in argocd cert-manager envoy-gateway-system keycloak; do
+for ns in argocd metallb-system cert-manager envoy-gateway-system keycloak; do
   max_r="${MAX_RESTARTS[$ns]}"
   ns_timeout="${NS_TIMEOUT[$ns]}"
   echo "::group::  $ns  (timeout: ${ns_timeout}s  max-restarts: ${max_r})"

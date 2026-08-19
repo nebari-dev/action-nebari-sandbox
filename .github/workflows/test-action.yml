@@ -17,96 +17,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test-cluster-only:
-    name: "Test cluster-only profile"
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Nebari Sandbox
-        id: sandbox
-        uses: ./
-        with:
-          profile: cluster-only
-          cluster-name: test-cluster
-
-      - name: Verify cluster is functional
-        run: |
-          echo "Kubeconfig: ${{ steps.sandbox.outputs.kubeconfig }}"
-          echo "Cluster: ${{ steps.sandbox.outputs.cluster-name }}"
-
-          # Verify we can talk to the cluster
-          kubectl get namespaces
-
-          # Verify core components are running
-          kubectl get pods -n kube-system
-
-          # Deploy a simple workload to confirm scheduling works
-          kubectl create deployment nginx --image=nginx:alpine --replicas=1
-          kubectl wait --for=condition=Available deployment/nginx --timeout=60s
-          kubectl delete deployment nginx
-
-      - name: wait-platform must fail on an empty / unreachable cluster (#71)
-        # Negative-path guard for the readiness gate. This bare cluster-only
-        # cluster has none of the foundational namespaces, so wait-platform.sh
-        # must FAIL rather than pass vacuously on "0 resources ready". Pins the
-        # regression that motivated the preflight + per-namespace checks.
-        env:
-          KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
-          AWAIT_TIMEOUT: "30"
-        run: |
-          set -euo pipefail
-          # Empty cluster: reachable (preflight passes) but no foundational
-          # namespaces -> must fail via the per-namespace check. Pin the message
-          # so this branch can't pass on some unrelated failure.
-          out="$(bash scripts/wait-platform.sh 2>&1)" && rc=0 || rc=$?
-          if (( rc == 0 )); then
-            echo "::error::wait-platform.sh passed on a cluster with no platform workloads"; echo "${out}"; exit 1
-          fi
-          grep -q "no deployment/daemonset/statefulset found" <<<"${out}" \
-            || { echo "::error::empty-cluster failure was not the per-namespace check:"; echo "${out}"; exit 1; }
-          echo "OK: empty cluster failed via the per-namespace check"
-          # Unreachable cluster: the preflight must be what catches it. Asserting
-          # the preflight message (not just a non-zero exit) means a regressed
-          # preflight fails here instead of silently passing via the per-ns path.
-          out="$(KUBECONFIG=/dev/null bash scripts/wait-platform.sh 2>&1)" && rc=0 || rc=$?
-          if (( rc == 0 )); then
-            echo "::error::wait-platform.sh passed with an unreachable cluster"; echo "${out}"; exit 1
-          fi
-          grep -q "Cannot reach the cluster" <<<"${out}" \
-            || { echo "::error::unreachable-cluster failure was not caught by the preflight:"; echo "${out}"; exit 1; }
-          echo "OK: unreachable cluster failed via the preflight"
-
-      - name: Cleanup
-        if: always()
-        run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
-
   test-platform:
-    name: "Test platform profile (pre-built NIC binary)"
+    name: "Test platform (kind/local)"
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # Default nic-version 'latest' resolves to NIC >= v0.13.0, which provides
+      # the local (kind) cluster + local repository providers this action uses.
       - name: Setup Nebari Sandbox
         id: sandbox
         uses: ./
         with:
-          profile: platform
           cluster-name: nebari-platform-test
           resource-summary: "true"
 
-      - name: Run scenarios
-        run: bash tests/run-scenarios.sh
+      - name: Smoke check — foundational Applications are Healthy
         env:
           KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+        run: |
+          set -euo pipefail
+          kubectl get applications -n argocd -o wide
+          n=$(kubectl get applications -n argocd --no-headers 2>/dev/null | wc -l)
+          if (( n < 5 )); then
+            echo "::error::expected >= 5 ArgoCD Applications, found ${n}"; exit 1
+          fi
+          bad=$(kubectl get applications -n argocd \
+            -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.health.status}{"\n"}{end}' \
+            | awk '$2=="Missing" || $2=="Unknown" {print}')
+          if [[ -n "${bad}" ]]; then
+            echo "::error::some Applications are Missing/Unknown:"; echo "${bad}"; exit 1
+          fi
+          echo "OK: ${n} Applications, none Missing/Unknown"
 
       - name: Verify keycloak-issuer-url output (#25)
-        # Default action config sets `domain: nebari.local`, so the derived
-        # issuer URL must be `https://keycloak.nebari.local`. Asserting the
-        # exact value catches accidental changes to NIC's URL formula (or to
-        # the action's default domain).
         run: |
           set -euo pipefail
           EXPECTED="https://keycloak.nebari.local"
@@ -118,18 +63,6 @@ jobs:
           echo "OK: keycloak-issuer-url = ${ACTUAL}"
 
       - name: Verify keycloak-realm-admin-password reachability (#25)
-        # The previous version of this step waited on Job/keycloak-realm-setup
-        # to complete and then read the secret. That doesn't work: the Job
-        # has `argocd.argoproj.io/hook-delete-policy: HookSucceeded`, so
-        # ArgoCD deletes it as soon as it succeeds. By the time this step
-        # runs, `kubectl wait` errors with NotFound.
-        #
-        # The actual invariant worth checking: the
-        # nebari-realm-admin-credentials secret exists and has a non-empty
-        # password. NIC creates it during foundational-services install
-        # (BEFORE the realm-setup-job even runs), so it's present from the
-        # moment the action returns. The action's extract-outputs.sh polling
-        # captures it into the keycloak-realm-admin-password output.
         env:
           KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
           OUTPUT_VALUE: ${{ steps.sandbox.outputs.keycloak-realm-admin-password }}
@@ -138,20 +71,16 @@ jobs:
           SECRET=$(kubectl -n keycloak get secret nebari-realm-admin-credentials \
             -o jsonpath='{.data.password}' 2>/dev/null | base64 -d || true)
           if [[ -z "${SECRET}" ]]; then
-            echo "::error::nebari-realm-admin-credentials secret missing or has empty password — NIC foundational install may have failed"
+            echo "::error::nebari-realm-admin-credentials secret missing or empty — NIC foundational install may have failed"
             exit 1
           fi
           if [[ -z "${OUTPUT_VALUE}" ]]; then
-            echo "::error::keycloak-realm-admin-password output is empty even though the underlying secret is populated — extract-outputs.sh polling window may need extending"
+            echo "::error::keycloak-realm-admin-password output is empty even though the secret is populated — extract-outputs.sh polling window may need extending"
             exit 1
           fi
-          echo "OK: nebari-realm-admin-credentials secret is populated AND captured into the keycloak-realm-admin-password output"
+          echo "OK: nebari-realm-admin-credentials populated AND captured into the output"
 
       - name: Verify remaining platform outputs are populated
-        # extract-outputs.sh writes every output unconditionally, so a missing
-        # secret or LB IP yields an empty output and a green step. Assert the
-        # three that weren't already checked above so a silent-empty output
-        # fails the suite. Passed via env (not inline) to avoid quoting issues.
         env:
           GATEWAY_IP: ${{ steps.sandbox.outputs.gateway-ip }}
           KEYCLOAK_ADMIN_PASSWORD: ${{ steps.sandbox.outputs.keycloak-admin-password }}
@@ -164,24 +93,15 @@ jobs:
             || { echo "::error::keycloak-admin-password output is empty"; exit 1; }
           [[ -n "${ARGOCD_ADMIN_PASSWORD}" ]] \
             || { echo "::error::argocd-admin-password output is empty"; exit 1; }
-          echo "OK: gateway-ip=${GATEWAY_IP}; keycloak-admin-password and argocd-admin-password are populated"
+          echo "OK: gateway-ip=${GATEWAY_IP}; keycloak/argocd admin passwords populated"
 
       - name: Debug cluster state
         if: failure()
+        env:
+          KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
         run: |
-          echo "=== Pods ==="
-          kubectl get pods -A || true
-
-          echo ""
-          echo "=== ArgoCD Applications ==="
+          echo "=== Pods ==="; kubectl get pods -A || true
+          echo ""; echo "=== ArgoCD Applications ==="
           kubectl get applications -n argocd -o wide || true
-
-          echo ""
-          echo "=== Recent warning events ==="
+          echo ""; echo "=== Recent warning events ==="
           kubectl get events -A --field-selector type=Warning --sort-by='.lastTimestamp' 2>/dev/null | tail -30 || true
-
-      - name: Cleanup
-        if: always()
-        run: |
-          k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
-

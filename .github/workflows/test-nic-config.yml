@@ -42,13 +42,10 @@ jobs:
           domain: nebari.local
           certificate:
             type: selfsigned
-          git_repository:
-            url: "file:///tmp/nebari-gitops-test-nic-config"
-            branch: main
           cluster:
-            existing:
-              context: "k3d-test-nic-config"
-              storage_class: local-path
+            local: {}
+          repository:
+            local: {}
           EOF
           echo "--- consumer config ---"
           cat /tmp/my-nic-config.yaml
@@ -57,7 +54,6 @@ jobs:
         id: sandbox
         uses: ./
         with:
-          profile: platform
           cluster-name: test-nic-config
           nic-config: /tmp/my-nic-config.yaml
 
