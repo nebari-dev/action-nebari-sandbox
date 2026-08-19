@@ -8,7 +8,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "esbuild src/index.ts src/post.ts --bundle --platform=node --format=esm --target=node24 --outdir=dist",
+    "build": "esbuild src/index.ts src/post.ts --bundle --platform=node --format=esm --target=node24 --outdir=dist --banner:js='import { createRequire as __createRequire } from \"module\"; const require = __createRequire(import.meta.url);'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
