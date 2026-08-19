@@ -41,9 +41,15 @@ inputs:
     default: "false"
   nic-version:
     description: >
-      NIC version to install (platform profile only).
-      - 'latest' (default): downloads the latest released pre-built binary.
-      - 'vX.Y.Z': downloads a specific release's pre-built binary.
+      NIC version to install (platform profile only). Defaults to v0.12.0, the
+      last NIC release this action's existing-cluster + file:// GitOps setup is
+      compatible with: NIC v0.13.0 removed that combination, so newer releases
+      fail the platform deploy until the action migrates to the kind/local
+      provider (tracked in #97).
+      - 'vX.Y.Z' (default 'v0.12.0'): downloads that release's pre-built binary.
+        Keep at <= v0.12.0 until the kind migration lands.
+      - 'latest': downloads the latest released pre-built binary. Currently
+        resolves to a NIC that is incompatible with this action (see above).
       - '.': builds from $GITHUB_WORKSPACE (use when the consumer has the
         NIC repo checked out, e.g. NIC's own self-tests).
       - Any other string (branch name, tag, commit sha): clones that ref
@@ -52,7 +58,7 @@ inputs:
       Ignored when `nic-binary` is set. Leave at the default if you use
       `nic-binary`; setting both to meaningful values is an error.
     required: false
-    default: "latest"
+    default: "v0.12.0"
   nic-binary:
     description: >
       Path to a pre-built `nic` binary on the runner (platform profile only).
