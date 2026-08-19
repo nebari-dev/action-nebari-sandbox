@@ -11,3 +11,6 @@ nic-deploy-*.log
 *.swp
 .idea/
 .vscode/
+
+# Node / TS action build
+node_modules/

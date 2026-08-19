@@ -1,0 +1,41 @@
+name: Check dist
+
+# dist/ is the bundled JS the action actually runs (action.yml -> dist/index.js
+# + dist/post.js). It must stay in sync with src/; this rebuilds and fails if
+# the committed bundle is stale.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+  workflow_dispatch:
+
+jobs:
+  check-dist:
+    name: Rebuild dist and diff
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Compare committed dist against a fresh build
+        run: |
+          if [ -n "$(git status --porcelain dist/)" ]; then
+            echo "::error::dist/ is out of date. Run 'npm run build' and commit the result."
+            git diff --stat dist/
+            exit 1
+          fi
+          echo "OK: dist/ matches src/"
