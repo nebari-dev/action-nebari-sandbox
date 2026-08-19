@@ -122,7 +122,6 @@ ${GITOPS_DIR}/
         nebari-landingpage.yaml
         nebari-operator.yaml
         opentelemetry-collector.yaml
-        postgresql.yaml
         root.yaml                    (the App-of-Apps itself; excluded from its own watch)
     manifests/                       (raw manifests referenced by foundational Apps)
     nic-config.yaml                  (scrubbed config NIC writes back)

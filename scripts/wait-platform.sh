@@ -8,6 +8,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 TIMEOUT="${AWAIT_TIMEOUT:-300}"
 
+# Interval between existence polls while waiting for a namespace's rollout
+# resources to be created (see the appear-wait below).
+POLL_INTERVAL="${WAIT_POLL_INTERVAL:-5}"
+
 # Keycloak (KeycloakX, JVM) is the slowest foundational workload to boot and is
 # resource-marginal on the default GitHub runner (4 vCPU / 16 GB, shared with
 # k3d and the rest of the stack), so it intermittently misses the shared 300s
@@ -44,6 +48,13 @@ declare -A NS_TIMEOUT=(
 overall_ok=true
 total=0
 
+# Names of a rollout kind's resources in a namespace, empty if none (or the
+# namespace does not exist).
+rollout_names() {
+  kubectl get "$1" -n "$2" --no-headers \
+    -o custom-columns=':metadata.name' 2>/dev/null || true
+}
+
 # Preflight: make sure we can actually reach the cluster. Without this, a wrong
 # KUBECONFIG/context (or a cluster that never came up) makes every `kubectl get`
 # below error out, get swallowed, and report "0 resources" — which used to pass
@@ -59,19 +70,36 @@ for ns in argocd cert-manager envoy-gateway-system keycloak; do
   echo "::group::  $ns  (timeout: ${ns_timeout}s  max-restarts: ${max_r})"
 
   ns_count=0
+
+  # Appear-wait: ArgoCD may still be syncing this namespace when the gate
+  # starts (e.g. Keycloak's StatefulSet is only created once its database has
+  # initialized), so an empty first look does not mean "never installed". Poll
+  # until at least one rollout resource exists; the rollout waits below then
+  # spend whatever is left of this namespace's budget.
+  deadline=$(( SECONDS + ns_timeout ))
   found_any=false
+  while true; do
+    for kind in deployment daemonset statefulset; do
+      [[ -n "$(rollout_names "$kind" "$ns")" ]] && found_any=true
+    done
+    [[ "${found_any}" == "true" ]] && break
+    (( SECONDS >= deadline )) && break
+    sleep "${POLL_INTERVAL}"
+  done
+
   # Assumed contract: every foundational namespace ships at least one of these
   # three kinds. A component that ever shipped as only a Job/CronJob/bare Pod
   # would need adding here, else this gate would false-fail a healthy cluster
   # (#76).
   for kind in deployment daemonset statefulset; do
-    names=$(kubectl get "$kind" -n "$ns" --no-headers \
-      -o custom-columns=':metadata.name' 2>/dev/null || true)
+    names=$(rollout_names "$kind" "$ns")
     for name in $names; do
       found_any=true
       printf '  %-12s  %s/%s\n' "waiting..." "$kind" "$name"
+      remaining=$(( deadline - SECONDS ))
+      (( remaining < 1 )) && remaining=1
       if kubectl rollout status "$kind/$name" -n "$ns" \
-          --timeout="${ns_timeout}s" 2>&1 | sed 's/^/    /'; then
+          --timeout="${remaining}s" 2>&1 | sed 's/^/    /'; then
         printf '  %-12s  %s/%s\n' "ready" "$kind" "$name"
         (( ns_count++ )) || true
         (( total++ )) || true
@@ -88,7 +116,7 @@ for ns in argocd cert-manager envoy-gateway-system keycloak; do
   # not "nothing to wait for". Treat it as a failure so the gate can't pass on
   # an empty cluster.
   if [[ "${found_any}" != "true" ]]; then
-    echo "  no deployment/daemonset/statefulset found in ${ns}"
+    echo "  no deployment/daemonset/statefulset found in ${ns} after ${ns_timeout}s"
     if ! kubectl get namespace "$ns" >/dev/null 2>&1; then
       echo "  (namespace ${ns} does not exist)"
     fi
