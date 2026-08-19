@@ -34,7 +34,10 @@ KEYCLOAK_TIMEOUT="${KEYCLOAK_AWAIT_TIMEOUT:-600}"
 declare -A MAX_RESTARTS=(
   [argocd]=3
   [metallb-system]="${METALLB_MAX_RESTARTS:-10}"
-  [cert-manager]=3
+  # cert-manager's controller crash-restarts a few times during bootstrap while
+  # it waits for its own webhook/CRDs, then settles Ready. On a slow kind runner
+  # that flap can exceed a budget of 3, so give it headroom (overridable).
+  [cert-manager]="${CERT_MANAGER_MAX_RESTARTS:-8}"
   [envoy-gateway-system]=3
   [keycloak]="${KEYCLOAK_MAX_RESTARTS:-8}"
 )

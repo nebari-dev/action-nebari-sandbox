@@ -1,0 +1,23 @@
+{
+  "name": "action-nebari-sandbox",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Bootstrap a local Nebari platform (kind, via NIC) for component testing, and tear it down when the job ends.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts src/post.ts --bundle --platform=node --format=esm --target=node24 --outdir=dist --banner:js='import { createRequire as __createRequire } from \"module\"; const require = __createRequire(import.meta.url);'",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/exec": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,5 +1,8 @@
 name: "Setup Nebari Sandbox"
-description: "Reusable GitHub Action to bootstrap a local Nebari platform (kind, via NIC's local provider) for component testing"
+description: "Deploy a local Nebari platform (kind, via NIC's local provider) for component testing, and tear it down when the job ends."
+branding:
+  icon: box
+  color: purple
 
 inputs:
   cluster-name:
@@ -42,10 +45,10 @@ inputs:
   nic-binary:
     description: >
       Path to a pre-built `nic` binary on the runner. When set, the action
-      installs it directly and ignores `nic-version` — use this to build `nic`
-      once in an earlier job (e.g. upload/download it as an artifact) and reuse
-      it across per-provider or matrix jobs instead of rebuilding from source
-      each time. Mutually exclusive with a non-default `nic-version`.
+      installs it directly and ignores `nic-version` - use this to build `nic`
+      once in an earlier job and reuse it across matrix jobs instead of
+      rebuilding from source each time. Mutually exclusive with a non-default
+      `nic-version`.
     required: false
     default: ""
   nic-config:
@@ -54,9 +57,7 @@ inputs:
       its built-in config template and passes this file to `nic deploy -f`
       directly. For the action's outputs to resolve, the config's `project_name`
       must equal `cluster-name`, and it must use the `local` cluster provider
-      (`cluster.local`) and the `local` repository provider (`repository.local`),
-      which is what the action provisions. The action does not validate this;
-      NIC's config parser surfaces real mismatches at deploy time.
+      (`cluster.local`) and the `local` repository provider (`repository.local`).
     required: false
     default: ""
   in-cluster-dns:
@@ -64,126 +65,63 @@ inputs:
       When 'true' (default), add a CoreDNS entry so the external Nebari
       hostnames (`*.<domain>`, e.g. `keycloak.nebari.local`) resolve to the
       gateway from INSIDE the cluster. Required for consumer pods doing
-      server-side OIDC: Keycloak's discovery document advertises the external
-      issuer, so a pod must reach that same hostname (see #69). Only
-      `keycloak.<domain>`, `argocd.<domain>`, and `<domain>` have valid TLS SANs.
-      Set 'false' if you manage in-cluster DNS yourself.
+      server-side OIDC (see #69). Set 'false' if you manage in-cluster DNS
+      yourself.
     required: false
     default: "true"
+  destroy:
+    description: >
+      When 'true' (default), destroy the deployment (`nic destroy`) in the
+      action's post step when the job ends, including on failure or
+      cancellation. Set 'false' to leave the cluster running (e.g. to inspect
+      it in a later step).
+    required: false
+    default: "true"
+  token:
+    description: >
+      GitHub token used by the NIC installer for authenticated release/API
+      calls (avoids the low unauthenticated rate limit).
+    required: false
+    default: ${{ github.token }}
 
 outputs:
   kubeconfig:
-    description: "Path to the kubeconfig file for the created kind cluster."
-    value: ${{ steps.deploy.outputs.kubeconfig }}
+    description: "Path to the kubeconfig file for the created kind cluster (also exported as KUBECONFIG)."
   cluster-name:
     description: "Name of the deployment (NIC project_name; kind context is `kind-<cluster-name>`)."
-    value: ${{ steps.deploy.outputs.cluster-name }}
   gitops-dir:
     description: "Local GitOps directory NIC created and mounted into the cluster (~/.nic/gitops/<cluster-name>)."
-    value: ${{ steps.deploy.outputs.gitops-dir }}
   keycloak-admin-password:
     description: "Keycloak admin password for the *master* realm. Use `keycloak-realm-admin-password` for the nebari realm."
-    value: ${{ steps.extract-outputs.outputs.keycloak-admin-password }}
   keycloak-realm-admin-password:
     description: >
       Keycloak admin password for the *nebari* realm. Provisioned asynchronously
-      by NIC's realm-setup PostSync hook after Keycloak becomes Ready, so this
-      may be empty if the secret has not materialized by the time
-      extract-outputs.sh polls (see #27). When empty, read the
-      `nebari-realm-admin-credentials` secret in the `keycloak` namespace after
-      your own wait-for-realm step.
-    value: ${{ steps.extract-outputs.outputs.keycloak-realm-admin-password }}
+      by NIC's realm-setup PostSync hook, so this may be empty if the secret has
+      not materialized by the time extract-outputs.sh polls (see #27). When
+      empty, read the `nebari-realm-admin-credentials` secret in the `keycloak`
+      namespace after your own wait-for-realm step.
   argocd-admin-password:
     description: "ArgoCD admin password."
-    value: ${{ steps.extract-outputs.outputs.argocd-admin-password }}
   gateway-ip:
     description: "Gateway LoadBalancer IP, assigned by MetalLB from the kind Docker network pool (routable from the Linux runner)."
-    value: ${{ steps.extract-outputs.outputs.gateway-ip }}
   keycloak-issuer-url:
     description: >
       External public issuer URL for the Keycloak deployment, e.g.
       `https://keycloak.nebari.local`. Derived from the `domain` field in the
       NIC config, matching NIC's own formula. Useful for JWT `iss` claim
       validation in consumer e2e tests.
-    value: ${{ steps.extract-outputs.outputs.keycloak-issuer-url }}
   domain:
-    description: >
-      The Nebari domain the platform was deployed with, e.g. `nebari.local`.
-      Read from the NIC config in the gitops repo.
-    value: ${{ steps.extract-outputs.outputs.domain }}
+    description: "The Nebari domain the platform was deployed with, e.g. `nebari.local`."
   ca-cert-path:
     description: >
       Path on the runner to the sandbox gateway's CA certificate, extracted from
       the `nebari-gateway-tls` secret. Use it for runner-side `curl --cacert`, or
-      to build a ConfigMap/Secret your pods mount so they trust `https://<domain>`
-      (the gateway serves a selfsigned cert). The same CA is published in-cluster
-      as ConfigMap `nebari-sandbox-ca` (key `ca.crt`) in `kube-public`. Empty if
-      the gateway TLS secret could not be read (see #69).
-    value: ${{ steps.publish-ca.outputs.ca-cert-path }}
+      to build a ConfigMap/Secret your pods mount so they trust `https://<domain>`.
+      The same CA is published in-cluster as ConfigMap `nebari-sandbox-ca` (key
+      `ca.crt`) in `kube-public`. Empty if the gateway TLS secret could not be
+      read (see #69).
 
 runs:
-  using: "composite"
-  steps:
-    - name: Install NIC
-      shell: bash
-      run: ${{ github.action_path }}/scripts/install-nic.sh
-      env:
-        NIC_VERSION: ${{ inputs.nic-version }}
-        NIC_BINARY: ${{ inputs.nic-binary }}
-        GITHUB_TOKEN: ${{ github.token }}
-
-    - name: Deploy platform
-      id: deploy
-      shell: bash
-      run: ${{ github.action_path }}/scripts/deploy-platform.sh
-      env:
-        CLUSTER_NAME: ${{ inputs.cluster-name }}
-        NEBARI_TIMING_REPORT: ${{ inputs.timing-report }}
-        NIC_CONFIG: ${{ inputs.nic-config }}
-
-    - name: Extract platform outputs
-      id: extract-outputs
-      shell: bash
-      run: ${{ github.action_path }}/scripts/extract-outputs.sh
-      env:
-        GITOPS_DIR: ${{ steps.deploy.outputs.gitops-dir }}
-
-    - name: Set up in-cluster DNS
-      if: inputs.in-cluster-dns == 'true'
-      shell: bash
-      run: ${{ github.action_path }}/scripts/setup-in-cluster-dns.sh
-      env:
-        DOMAIN: ${{ steps.extract-outputs.outputs.domain }}
-        GATEWAY_IP: ${{ steps.extract-outputs.outputs.gateway-ip }}
-
-    - name: Await platform workloads
-      shell: bash
-      run: ${{ github.action_path }}/scripts/wait-platform.sh
-      env:
-        AWAIT_TIMEOUT: "300"
-
-    - name: Publish sandbox CA
-      id: publish-ca
-      shell: bash
-      run: ${{ github.action_path }}/scripts/publish-ca.sh
-      env:
-        CLUSTER_NAME: ${{ inputs.cluster-name }}
-
-    - name: Collect deploy-phase timings
-      if: inputs.timing-report == 'true'
-      shell: bash
-      run: python3 ${{ github.action_path }}/scripts/collect-deploy-timings.py
-      env:
-        CLUSTER_NAME: ${{ inputs.cluster-name }}
-
-    - name: Generate resource summary
-      if: inputs.resource-summary == 'true'
-      shell: bash
-      run: python3 ${{ github.action_path }}/scripts/resource-summary.py
-
-    - name: Generate timing report
-      if: inputs.timing-report == 'true'
-      shell: bash
-      run: python3 ${{ github.action_path }}/scripts/timing-report.py
-      env:
-        CLUSTER_NAME: ${{ inputs.cluster-name }}
+  using: "node24"
+  main: "dist/index.js"
+  post: "dist/post.js"
