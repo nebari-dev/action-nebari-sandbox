@@ -30,43 +30,16 @@
 
 ## Usage
 
-### cluster-only
-
-Spin up a bare Kubernetes cluster for quick smoke tests:
-
-```yaml
-steps:
-  - uses: actions/checkout@v6
-
-  - uses: nebari-dev/action-nebari-sandbox@v2
-    id: sandbox
-    with:
-      profile: cluster-only
-
-  - name: Run tests
-    run: |
-      kubectl get nodes
-      # your tests here
-    env:
-      KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
-
-  - name: Cleanup
-    if: always()
-    run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
-```
-
-### platform
-
-Deploy the full Nebari foundational stack for integration testing:
+Deploy the full Nebari foundational stack for integration testing. NIC's
+`local` provider creates a kind cluster, and the action tears it down in its
+post step when the job ends (see [Cleanup](#cleanup)):
 
 ```yaml
 steps:
   - uses: actions/checkout@v6
 
-  - uses: nebari-dev/action-nebari-sandbox@v2
+  - uses: nebari-dev/action-nebari-sandbox@v3
     id: sandbox
-    with:
-      profile: platform
 
   - name: Run integration tests
     env:
@@ -79,24 +52,20 @@ steps:
       curl -sk --resolve "keycloak.nebari.local:443:${GATEWAY_IP}" \
         https://keycloak.nebari.local/realms/master/.well-known/openid-configuration
       # your integration tests here
-
-  - name: Cleanup
-    if: always()
-    run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
 ```
 
-> **Note:** by default the `platform` profile downloads NIC's latest pre-built
-> binary. Pass `nic-version: <branch>` (or `'.'` to use `$GITHUB_WORKSPACE`)
-> if you want to build NIC from source — that path needs `actions/setup-go`
-> in your workflow before this action.
+> **Note:** by default the action downloads NIC's latest pre-built binary. Pass
+> `nic-version: <branch>` (or `'.'` to use `$GITHUB_WORKSPACE`) if you want to
+> build NIC from source - that path needs `actions/setup-go` in your workflow
+> before this action.
 
 ### platform + consumer app via GitOps
 
 Most consumers don't just want to spin up the platform — they want to deploy
-their own application on top of it and run an end-to-end test. The `platform`
-profile leaves a fully-bootstrapped local git repository at
-`${{ steps.sandbox.outputs.gitops-dir }}` (default `/tmp/nebari-gitops-<cluster>`)
-bind-mounted into the k3d node. NIC seeds it with a root
+their own application on top of it and run an end-to-end test. The action
+leaves a fully-bootstrapped local git repository at
+`${{ steps.sandbox.outputs.gitops-dir }}` (`~/.nic/gitops/<cluster-name>`)
+mounted into the kind node. NIC seeds it with a root
 [App-of-Apps](https://argo-cd.readthedocs.io/en/stable/operator-manual/cluster-bootstrapping/)
 (`Application/nebari-root`) that watches `${GITOPS_DIR}/apps/` for any `*.yaml`
 and creates the corresponding ArgoCD `Application` automatically. Drop your
@@ -117,6 +86,7 @@ ${GITOPS_DIR}/
         gateway-config.yaml
         httproutes.yaml
         keycloak.yaml
+        metallb-config.yaml
         nebari-landingpage.yaml
         nebari-operator.yaml
         opentelemetry-collector.yaml
@@ -136,15 +106,13 @@ vars in scope at invocation time:
 steps:
   - uses: actions/checkout@v6
 
-  - uses: nebari-dev/action-nebari-sandbox@v2
+  - uses: nebari-dev/action-nebari-sandbox@v3
     id: sandbox
-    with:
-      profile: platform
 
   - name: Surface KUBECONFIG for the sub-action's wait
     run: echo "KUBECONFIG=${{ steps.sandbox.outputs.kubeconfig }}" >> "$GITHUB_ENV"
 
-  - uses: nebari-dev/action-nebari-sandbox/add-software-pack@v2
+  - uses: nebari-dev/action-nebari-sandbox/add-software-pack@v3
     with:
       gitops-dir:           ${{ steps.sandbox.outputs.gitops-dir }}
       app-name:             my-app
@@ -167,10 +135,6 @@ steps:
       GATEWAY_IP: ${{ steps.sandbox.outputs.gateway-ip }}
     run: |
       # your tests against the deployed app here
-
-  - name: Cleanup
-    if: always()
-    run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
 ```
 
 A minimal `application.yaml` modeled on the foundational landing-page App
@@ -236,30 +200,27 @@ the workflow free of extra `uses:` lines:
 #### Customizing the NIC config
 
 If you need the platform itself configured differently (e.g. a different
-domain, a custom certificate, additional `git_repository` settings), pass
-`nic-config` with a path to your own config file. Two fields must match
-what the action actually provisioned — see the input docs for details:
+domain or a custom certificate), pass `nic-config` with a path to your own
+config file. It must use the `local` cluster and `local` repository providers,
+and its `project_name` must equal `cluster-name` for the action's outputs to
+resolve — see the input docs for details:
 
 ```yaml
 - name: Write a custom NIC config
   run: |
     cat > /tmp/my-nic-config.yaml <<'EOF'
-    project_name: my-project
+    project_name: my-cluster
     domain: nebari.local
     certificate:
       type: selfsigned
-    git_repository:
-      url: "file:///tmp/nebari-gitops-my-cluster"
-      branch: main
     cluster:
-      existing:
-        context: "k3d-my-cluster"
-        storage_class: local-path
+      local: {}
+    repository:
+      local: {}
     EOF
 
-- uses: nebari-dev/action-nebari-sandbox@v2
+- uses: nebari-dev/action-nebari-sandbox@v3
   with:
-    profile: platform
     cluster-name: my-cluster
     nic-config: /tmp/my-nic-config.yaml
 ```
@@ -268,8 +229,8 @@ what the action actually provisioned — see the input docs for details:
 
 Browser-based auth reaches Keycloak from the runner via the gateway IP (the
 `curl --resolve` pattern above). But an app pod that validates OIDC *itself*
-(fetches the issuer from inside the cluster) needs two things the platform
-profile now sets up for you:
+(fetches the issuer from inside the cluster) needs two things the action now
+sets up for you:
 
 - **In-cluster DNS.** Keycloak's discovery document advertises the external
   issuer `https://keycloak.<domain>`, so pods must resolve that exact hostname.
@@ -342,24 +303,16 @@ profile now sets up for you:
 
 ## Cleanup
 
-The action does not automatically delete the cluster. Add a cleanup step to your workflow:
-
-```yaml
-# cluster-only
-- name: Cleanup
-  if: always()
-  run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
-
-# platform
-- name: Cleanup
-  if: always()
-  run: k3d cluster delete ${{ steps.sandbox.outputs.cluster-name }}
-```
+The action destroys the deployment automatically in its post step when the job
+ends — including on failure or cancellation — so no cleanup step is needed. Set
+`destroy: false` to leave the cluster running (e.g. to inspect it in a later
+step); tear it down yourself with `nic destroy -f <config>` or
+`kind delete cluster --name <cluster-name>`.
 
 ## Requirements
 
-- **Both profiles:** `ubuntu-24.04` (or `ubuntu-latest`) runner with Docker (pre-installed on GitHub-hosted runners)
-- **`platform` profile:** none extra by default (NIC's pre-built binary is downloaded). Go 1.26+ via `actions/setup-go@v6` is only needed if you set `nic-version` to a non-release ref (branch, sha, or `.`) and want to build from source (match NIC's `go.mod`).
+- `ubuntu-24.04` (or `ubuntu-latest`) runner with Docker (pre-installed on GitHub-hosted runners); NIC's `local` provider creates the kind cluster in Docker.
+- NIC v0.13.0 or newer (downloaded automatically). Go 1.26+ via `actions/setup-go@v6` is only needed if you set `nic-version` to a non-release ref (branch, sha, or `.`) and want to build from source (match NIC's `go.mod`).
 
 ## Contributing
 
