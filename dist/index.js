@@ -19897,13 +19897,13 @@ async function deploy() {
     GITOPS_DIR: gitopsDir
   });
   for (const k of EXTRACT_OUTPUTS) core.setOutput(k, ex[k] ?? "");
+  await runStep("wait", "wait-platform.sh", { AWAIT_TIMEOUT: "300" });
   if (inClusterDns) {
     await runStep("dns", "setup-in-cluster-dns.sh", {
       DOMAIN: ex["domain"] ?? "",
       GATEWAY_IP: ex["gateway-ip"] ?? ""
     });
   }
-  await runStep("wait", "wait-platform.sh", { AWAIT_TIMEOUT: "300" });
   const { outputs: ca } = await runStep("publish-ca", "publish-ca.sh", {
     CLUSTER_NAME: clusterName
   });

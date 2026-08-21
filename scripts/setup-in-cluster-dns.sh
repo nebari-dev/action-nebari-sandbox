@@ -6,23 +6,31 @@
 # fetch that exact hostname. But `*.<domain>` doesn't resolve inside the cluster
 # (the README only reaches the gateway from the runner via `curl --resolve`).
 #
-# Which file CoreDNS reads depends on the distribution, so we detect it:
+# kind's CoreDNS comes from kubeadm: a single `coredns` ConfigMap whose
+# `Corefile` key is the only thing it reads. We prepend a server block that
+# answers the whole `<domain>` zone with the gateway LoadBalancer IP using the
+# `template` plugin (the only stock plugin that supports wildcard responses).
+# Zone matching is most-specific-first, so position relative to `.:53` does not
+# matter.
 #
-#   - k3s CoreDNS imports an optional `coredns-custom` ConfigMap (mounted at
-#     /etc/coredns/custom, `import .../*.server`). Write there, because k3s
-#     reconciles its packaged manifests and would revert a Corefile edit.
-#   - kind/kubeadm CoreDNS has no such import and no custom mount, so the only
-#     file it reads is the `Corefile` key itself. Writing `coredns-custom`
-#     there is a silent no-op (this was #104): the ConfigMap is created,
-#     CoreDNS restarts, and nothing changes.
+# This deliberately does NOT write a `coredns-custom` ConfigMap. That is a k3s
+# convention (k3s CoreDNS mounts it and does `import /etc/coredns/custom/*.server`,
+# and reverts hand edits to its packaged Corefile). kind honors no such import,
+# so writing there was a silent no-op -- created, never read, reported ready.
+# That was #104. This action provisions kind and only kind: `action.yml` has no
+# provider input, `deploy-platform.sh` hard-codes `cluster: local: {}` and the
+# `kind-<project>` context, and the k3d path was deleted in #99. If a non-kind
+# local provider ever returns, reintroduce the branch then rather than carrying
+# a dead one now.
 #
-# Either way the block answers the whole `<domain>` zone with the gateway
-# LoadBalancer IP using the `template` plugin (the only stock plugin that
-# supports wildcard responses).
+# Upstream: NIC owns the kind cluster, MetalLB, the gateway, and `domain` -- every
+# input to this mapping -- so it could establish the zone at provision time with
+# no read-modify-write at all. Tracked in nebari-dev/nebari-infrastructure-core#613;
+# remove this script once a NIC release does it.
 #
 # Only keycloak.<domain>/argocd.<domain>/<domain> have valid TLS SANs today
 # (NIC's gateway cert has no wildcard SAN), so hosts outside those resolve but
-# fail TLS at handshake — see the action README / issue #69.
+# fail TLS at handshake -- see the action README / issue #69.
 
 set -euo pipefail
 
@@ -36,33 +44,17 @@ fi
 # The domain is interpolated straight into the Corefile below, so reject anything
 # that isn't a plain hostname. A consumer nic-config domain with Corefile
 # metacharacters ({ } ;) would otherwise produce a malformed block that fails
-# CoreDNS's reload and hard-fails the run — skip cleanly with a clear reason.
+# CoreDNS's reload and hard-fails the run -- skip cleanly with a clear reason.
 if [[ ! "${DOMAIN}" =~ ^[A-Za-z0-9.-]+$ ]]; then
   echo "::warning::in-cluster DNS: domain '${DOMAIN}' is not a plain hostname; skipping."
   exit 0
 fi
-
-# Self-poll the gateway LB IP rather than trusting only the passed-in value.
-# extract-outputs captures gateway-ip once, ~60s after deploy; if klipper was
-# slow then, the value is empty and this feature would silently never apply.
-# Re-poll here (same query extract-outputs uses) so a late LB assignment is
-# still picked up.
-# Poll shape overridable (env) so the skip path is fast to unit-test.
-DNS_POLL_ATTEMPTS="${DNS_POLL_ATTEMPTS:-12}"
-DNS_POLL_INTERVAL="${DNS_POLL_INTERVAL:-5}"
+# Runs after wait-platform, so MetalLB has assigned the gateway address and the
+# caller passes it through. No self-polling: an empty value here means the
+# platform never got a LoadBalancer IP, which is a platform problem, not
+# something to wait on again.
 if [[ -z "${GATEWAY_IP}" ]]; then
-  echo "gateway-ip not passed in; polling for the LoadBalancer IP..."
-  for i in $(seq 1 "${DNS_POLL_ATTEMPTS}"); do
-    GATEWAY_IP="$(kubectl get svc -n envoy-gateway-system \
-      -o jsonpath='{.items[?(@.spec.type=="LoadBalancer")].status.loadBalancer.ingress[0].ip}' \
-      2>/dev/null)" || true
-    [[ -n "${GATEWAY_IP}" ]] && break
-    echo "Waiting for LoadBalancer IP... (attempt ${i}/${DNS_POLL_ATTEMPTS})"
-    sleep "${DNS_POLL_INTERVAL}"
-  done
-fi
-if [[ -z "${GATEWAY_IP}" ]]; then
-  echo "::warning::in-cluster DNS: gateway-ip is empty (klipper never assigned a LoadBalancer IP); skipping. Pods will not resolve ${DOMAIN}."
+  echo "::warning::in-cluster DNS: gateway-ip is empty (MetalLB never assigned a LoadBalancer IP); skipping. Pods will not resolve ${DOMAIN}."
   exit 0
 fi
 if [[ ! "${GATEWAY_IP}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -73,25 +65,16 @@ fi
 echo "::group::Set up in-cluster DNS for *.${DOMAIN} -> ${GATEWAY_IP}"
 
 SERVER_FILE="$(mktemp)"
-# NEW_COREFILE and ORIG_COREFILE are only used on the Corefile path below;
-# declare them here so a single trap covers every temp file.
 NEW_COREFILE=""
 ORIG_COREFILE=""
 trap 'rm -f "${SERVER_FILE}" "${NEW_COREFILE}" "${ORIG_COREFILE}"' EXIT
+
 # A: answer every name in the zone with the gateway IP. AAAA returns an empty
 # NOERROR so dual-stack / happy-eyeballs resolvers don't stall. The IN ANY
 # catch-all makes any other qtype (SRV/TXT/HTTPS/SVCB type 65) return empty
 # NOERROR too, instead of SERVFAIL, since this is an authoritative zone with no
 # fallthrough.
-# MARKER lets a re-run find and replace the block we wrote, instead of merely
-# noticing that some block for the zone exists. Without it the step is
-# presence-based: a stale gateway IP would be kept, and a zone written without
-# an explicit `:53` would be missed and then duplicated, which CoreDNS refuses
-# to load ("cannot serve ... it is already defined") and which would take all
-# cluster DNS down with it.
-MARKER="# nebari-sandbox: managed zone block (replaced on re-run)"
 cat > "${SERVER_FILE}" <<EOF
-${MARKER}
 ${DOMAIN}:53 {
     errors
     template IN A ${DOMAIN} {
@@ -109,9 +92,6 @@ EOF
 echo "server block for the ${DOMAIN} zone:"
 sed 's/^/  /' "${SERVER_FILE}"
 
-# Read the live Corefile to decide which mechanism this cluster's CoreDNS
-# actually honors. Unreadable means we cannot tell, so skip like an extractor
-# rather than mutating a ConfigMap that may never be read.
 COREFILE="$(kubectl -n kube-system get configmap coredns \
   -o jsonpath='{.data.Corefile}' 2>/dev/null || true)"
 if [[ -z "${COREFILE}" ]]; then
@@ -120,101 +100,87 @@ if [[ -z "${COREFILE}" ]]; then
   exit 0
 fi
 
-# Roll back whatever we changed, so a CoreDNS that will not load leaves the
-# cluster's DNS as it was rather than broken. Set per branch below.
-rollback() { :; }
-
-# The `.server` glob specifically: that is the key name we write, and a Corefile
-# importing only `*.override` would never read it. Testing for the directory
-# alone would reintroduce #104 in a different disguise.
-if grep -qF 'import /etc/coredns/custom/*.server' <<<"${COREFILE}"; then
-  MECHANISM="coredns-custom ConfigMap (k3s-style import)"
-  rollback() {
-    kubectl -n kube-system patch configmap coredns-custom --type json \
-      -p '[{"op":"remove","path":"/data/nebari-sandbox.server"}]' >/dev/null 2>&1 || true
-  }
-  # Merge-patch so we don't clobber any coredns-custom keys a consumer set. If
-  # the ConfigMap doesn't exist yet, patch fails and we create it.
-  if ! kubectl -n kube-system get configmap coredns-custom >/dev/null 2>&1; then
-    kubectl -n kube-system create configmap coredns-custom \
-      --from-file=nebari-sandbox.server="${SERVER_FILE}"
-  else
-    kubectl -n kube-system create configmap coredns-custom \
-      --from-file=nebari-sandbox.server="${SERVER_FILE}" \
-      --dry-run=client -o yaml \
-      | kubectl -n kube-system patch configmap coredns-custom --type merge --patch-file /dev/stdin
-  fi
-else
-  MECHANISM="coredns Corefile server block"
-  # No `.server` import, so the Corefile is the only thing CoreDNS reads.
-  # Prepend the zone as an additional server block; zone matching is
-  # most-specific, so position relative to `.:53` does not matter.
-
-  # A zone for this domain that we did not write belongs to whoever did. Adding
-  # ours alongside it would define the zone twice and CoreDNS would refuse to
-  # start, so leave it alone and say why. Matches `<domain> {` and
-  # `<domain>:<port> {`, which is why the presence check is not a plain grep.
-  DOMAIN_RE="^[[:space:]]*${DOMAIN//./\\.}(:[0-9]+)?[[:space:]]*\\{"
-  if grep -qE "${DOMAIN_RE}" <<<"${COREFILE}" && ! grep -qF "${MARKER}" <<<"${COREFILE}"; then
-    echo "::warning::in-cluster DNS: the Corefile already defines a ${DOMAIN} zone that this action did not write; leaving it untouched. Pods will resolve ${DOMAIN} however that block says."
-    echo "::endgroup::"
-    exit 0
-  fi
-
-  ORIG_COREFILE="$(mktemp)"
-  printf '%s\n' "${COREFILE}" > "${ORIG_COREFILE}"
-  rollback() {
-    kubectl -n kube-system create configmap coredns \
-      --from-file=Corefile="${ORIG_COREFILE}" \
-      --dry-run=client -o yaml \
-      | kubectl -n kube-system patch configmap coredns --type merge --patch-file /dev/stdin \
-      >/dev/null 2>&1 || true
-  }
-
-  # Drop a block we wrote previously, so a re-run converges on the current
-  # gateway IP instead of keeping a stale one. Our block starts at MARKER and
-  # ends at the next `}` in column 0.
-  NEW_COREFILE="$(mktemp)"
-  {
-    cat "${SERVER_FILE}"
-    printf '\n'
-    awk -v marker="${MARKER}" '
-      $0 == marker { skipping = 1; next }
-      skipping && /^}/ { skipping = 0; next }
-      skipping { next }
-      { print }
-    ' "${ORIG_COREFILE}"
-  } > "${NEW_COREFILE}"
-
-  # Patch only the Corefile key, so any other key in the ConfigMap survives.
-  if ! kubectl -n kube-system create configmap coredns \
-      --from-file=Corefile="${NEW_COREFILE}" \
-      --dry-run=client -o yaml \
-      | kubectl -n kube-system patch configmap coredns --type merge --patch-file /dev/stdin; then
-    echo "::warning::in-cluster DNS: could not patch the coredns Corefile; skipping. Pods will not resolve ${DOMAIN}."
-    echo "::endgroup::"
-    exit 0
-  fi
-fi
-
-# Restart CoreDNS so new pods pick up the updated config immediately, rather than
-# waiting up to ~60s for the kubelet volume sync + reload plugin.
+# Leave an existing zone for this domain alone, whoever wrote it. Defining the
+# zone twice makes CoreDNS refuse to load ("cannot serve ... it is already
+# defined"), which would take the `.:53` block -- all cluster DNS -- down with
+# it. Matching only `<domain>:53` would miss the other legal spellings, so this
+# covers the bare zone, an explicit port, the fully-qualified form, and a
+# multi-zone block that merely includes our domain. A more specific zone
+# (`sub.<domain>`) deliberately does not count: that is a different zone and
+# does not conflict.
 #
-# This runs while the foundational stack is still converging, so a CoreDNS that
-# comes back unhealthy would break DNS for everything and surface as an
-# unrelated-looking ArgoCD or Keycloak failure. Roll back and skip instead: this
-# is an optional convenience, and per CONTRIBUTING it must degrade rather than
-# fail the consumer's run.
-if ! kubectl -n kube-system rollout restart deployment/coredns \
-   || ! kubectl -n kube-system rollout status deployment/coredns --timeout=120s; then
-  echo "::warning::in-cluster DNS: CoreDNS did not become ready after the change; rolling back so cluster DNS keeps working. Pods will not resolve ${DOMAIN}."
-  rollback
-  kubectl -n kube-system rollout restart deployment/coredns >/dev/null 2>&1 || true
-  kubectl -n kube-system rollout status deployment/coredns --timeout=120s >/dev/null 2>&1 || true
+# The pattern errs toward matching, on purpose. A false positive costs us a
+# change we could have made and says so in the warning; a false negative
+# defines the zone twice and CoreDNS refuses to load, taking cluster DNS with
+# it. It therefore also matches a nested `template IN A <domain> {` directive,
+# which in practice means a block of ours is already in place -- so skipping is
+# the right answer there too.
+DOM_ESC="${DOMAIN//./\\.}"
+ZONE_RE="^[[:space:]]*([^#{]*[[:space:]])?${DOM_ESC}\.?(:[0-9]+)?([[:space:]][^{]*)?[[:space:]]*\{"
+if grep -qE "${ZONE_RE}" <<<"${COREFILE}"; then
+  echo "::warning::in-cluster DNS: the Corefile already defines a ${DOMAIN} zone; leaving it untouched. Pods will resolve ${DOMAIN} however that block says, which may not be ${GATEWAY_IP}."
   echo "::endgroup::"
   exit 0
 fi
 
-echo "In-cluster DNS ready via ${MECHANISM}: *.${DOMAIN} resolves to ${GATEWAY_IP} for pods."
-echo "  Note: only keycloak.${DOMAIN}, argocd.${DOMAIN}, and ${DOMAIN} have valid TLS SANs."
+ORIG_COREFILE="$(mktemp)"
+printf '%s\n' "${COREFILE}" > "${ORIG_COREFILE}"
+NEW_COREFILE="$(mktemp)"
+cat "${SERVER_FILE}" "${ORIG_COREFILE}" > "${NEW_COREFILE}"
+
+# Never hand CoreDNS a Corefile that lost what it already had. Prepending cannot
+# drop anything, so this is belt-and-braces -- but the failure it guards against
+# (a Corefile that parses fine and serves nothing) is invisible to the rollout
+# check below, so it is worth asserting rather than trusting.
+if ! grep -qE '^[[:space:]]*\.:53[[:space:]]*\{' "${NEW_COREFILE}" \
+   || [[ "$(grep -c '{' "${NEW_COREFILE}")" != "$(grep -c '}' "${NEW_COREFILE}")" ]]; then
+  echo "::warning::in-cluster DNS: the assembled Corefile lost the default server block or has unbalanced braces; refusing to apply it. Pods will not resolve ${DOMAIN}."
+  echo "::endgroup::"
+  exit 0
+fi
+
+# Patch only the Corefile key, so any other key in the ConfigMap survives.
+apply_corefile() {
+  kubectl -n kube-system create configmap coredns \
+    --from-file=Corefile="$1" \
+    --dry-run=client -o yaml \
+    | kubectl -n kube-system patch configmap coredns --type merge --patch-file /dev/stdin
+}
+
+if ! apply_corefile "${NEW_COREFILE}"; then
+  echo "::warning::in-cluster DNS: could not patch the coredns Corefile; skipping. Pods will not resolve ${DOMAIN}."
+  echo "::endgroup::"
+  exit 0
+fi
+
+# Restart CoreDNS so new pods pick up the updated config immediately, rather
+# than waiting up to ~60s for the kubelet volume sync + reload plugin.
+if kubectl -n kube-system rollout restart deployment/coredns \
+   && kubectl -n kube-system rollout status deployment/coredns --timeout=120s; then
+  echo "In-cluster DNS ready via the coredns Corefile: *.${DOMAIN} resolves to ${GATEWAY_IP} for pods."
+  echo "  Note: only keycloak.${DOMAIN}, argocd.${DOMAIN}, and ${DOMAIN} have valid TLS SANs."
+  echo "::endgroup::"
+  exit 0
+fi
+
+# CoreDNS did not come back. Put the Corefile back: this is an optional
+# convenience, and leaving cluster DNS broken would fail everything downstream
+# with unrelated-looking errors.
+echo "::warning::in-cluster DNS: CoreDNS did not become ready after the change; restoring the previous Corefile. Pods will not resolve ${DOMAIN}."
+RESTORED=1
+apply_corefile "${ORIG_COREFILE}" || RESTORED=0
+kubectl -n kube-system rollout restart deployment/coredns >/dev/null 2>&1 || true
+kubectl -n kube-system rollout status deployment/coredns --timeout=120s >/dev/null 2>&1 \
+  || RESTORED=0
+
+# Warn-and-skip is only honest while the damage is confined to this feature.
+# An unverified restore means cluster DNS may be down, so the consumer has to
+# hear about it as an error rather than read a reassuring warning.
+if [[ "${RESTORED}" != 1 ]]; then
+  echo "::error::in-cluster DNS: CoreDNS is broken and could not be restored. Cluster DNS is likely down; expect unrelated-looking failures until it is fixed. Inspect: kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}'"
+  echo "::endgroup::"
+  exit 1
+fi
+echo "Previous Corefile restored; cluster DNS is back."
 echo "::endgroup::"
+exit 0

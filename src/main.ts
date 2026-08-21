@@ -128,16 +128,25 @@ async function deploy(): Promise<void> {
   })
   for (const k of EXTRACT_OUTPUTS) core.setOutput(k, ex[k] ?? '')
 
-  // 4. In-cluster DNS so pods can reach the external Keycloak issuer (#69).
+  // 4. Wait for the foundational stack to converge.
+  await runStep('wait', 'wait-platform.sh', { AWAIT_TIMEOUT: '300' })
+
+  // 5. In-cluster DNS so pods can reach the external Keycloak issuer (#69).
+  //
+  // After the wait, deliberately. The feature exists for CONSUMER pods doing
+  // server-side OIDC, and those cannot exist until this action returns, so
+  // there is nothing to gain by doing it earlier -- and two things to lose:
+  // MetalLB may not have assigned the gateway address yet (the script used to
+  // carry its own LoadBalancer polling loop to paper over that), and bouncing
+  // CoreDNS mid-convergence turns any DNS problem into an unrelated-looking
+  // ArgoCD or Keycloak failure. wait-platform does not cover kube-system, so
+  // running it first verified nothing about CoreDNS either.
   if (inClusterDns) {
     await runStep('dns', 'setup-in-cluster-dns.sh', {
       DOMAIN: ex['domain'] ?? '',
       GATEWAY_IP: ex['gateway-ip'] ?? ''
     })
   }
-
-  // 5. Wait for the foundational stack to converge.
-  await runStep('wait', 'wait-platform.sh', { AWAIT_TIMEOUT: '300' })
 
   // 6. Publish the gateway CA (runner file + in-cluster ConfigMap).
   const { outputs: ca } = await runStep('publish-ca', 'publish-ca.sh', {

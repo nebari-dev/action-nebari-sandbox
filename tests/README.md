@@ -34,6 +34,12 @@ Conventions:
   `git rev-parse --show-toplevel` for local runs.
 - **Fail loudly.** `set -euo pipefail` at the top, print what was checked and
   why it failed.
+- **`DOMAIN` and `GATEWAY_IP` are provided**, from the action's own `domain` and
+  `gateway-ip` outputs. Prefer them over re-deriving the same values from the
+  cluster: a test that computes its expectation the same way the code under test
+  does will agree with itself and prove nothing. Treat both as reserved names.
+  Keep a cluster-derived fallback (`${VAR:-}` then look it up) if you want the
+  scenario to run standalone, since only the fallback path executes locally.
 
 ## Running locally
 

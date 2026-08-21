@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Unit test (no cluster): setup-in-cluster-dns.sh must write the zone to the
-# file CoreDNS actually reads, which differs by distribution (#104).
+# Unit test (no cluster): setup-in-cluster-dns.sh must write the zone into the
+# file CoreDNS actually reads, must never hand CoreDNS a Corefile that lost what
+# it had, and must put the old one back if CoreDNS will not load the new one.
 #
-#   - kind/kubeadm: no custom import exists, so the zone goes into the Corefile.
-#   - k3s: CoreDNS imports /etc/coredns/custom/*.server, and k3s reconciles its
-#     packaged manifests, so the zone goes into the coredns-custom ConfigMap.
-#
-# Writing coredns-custom on kind was the #104 no-op: created, never read.
+# Background: the script used to write a `coredns-custom` ConfigMap, which only
+# k3s CoreDNS imports. On kind that was a silent no-op -- created, never read,
+# reported ready (#104). The assertions here are about WHAT ends up in the
+# Corefile, not merely that a write happened, because a Corefile can parse
+# perfectly and still serve nothing.
 
 set -euo pipefail
 
@@ -16,8 +17,8 @@ SCRIPT="${REPO_ROOT}/scripts/setup-in-cluster-dns.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
-# A kubeadm/kind Corefile: single .:53 block, no custom import.
-cat > "${WORK}/corefile-kind" <<'EOF'
+# A kubeadm/kind Corefile: single .:53 block.
+cat > "${WORK}/corefile" <<'EOF'
 .:53 {
     errors
     health {
@@ -38,201 +39,239 @@ cat > "${WORK}/corefile-kind" <<'EOF'
 }
 EOF
 
-# A k3s Corefile: NodeHosts plus the two custom imports.
-cat > "${WORK}/corefile-k3s" <<'EOF'
-.:53 {
-    errors
-    health
-    ready
-    kubernetes cluster.local in-addr.arpa ip6.arpa {
-      pods insecure
-      fallthrough in-addr.arpa ip6.arpa
-    }
-    hosts /etc/coredns/NodeHosts {
-      ttl 60
-      reload 15s
-      fallthrough
-    }
-    prometheus :9153
-    forward . /etc/resolv.conf
-    cache 30
-    loop
-    reload
-    loadbalance
-    import /etc/coredns/custom/*.override
-}
-import /etc/coredns/custom/*.server
-EOF
-
-# Stub kubectl that logs every mutation to $CALLS so we can assert on WHICH
-# ConfigMap was written, and serves the Corefile fixture named by $COREFILE.
+# Stub kubectl: serves the Corefile fixture named by $COREFILE, records every
+# mutation in $CALLS, and keeps the rendered Corefile in $RENDERED so tests can
+# assert on content. Failure injection via $PATCH_FAILS / $ROLLOUT_FAILS;
+# $RESTORE_FAILS fails only the SECOND patch, i.e. the restore.
 cat > "${WORK}/kubectl" <<'EOF'
 #!/usr/bin/env bash
 ARGS="$*"
-# Read stdin only when the real kubectl would: `--patch-file /dev/stdin` does,
-# `--type json -p '...'` does not. Draining unconditionally deadlocks the
-# rollback path (no pipe upstream); not draining at all gives the upstream
+# Read stdin only where the real kubectl would: `--patch-file /dev/stdin` does,
+# `create --from-file` and `--type json -p` do not. Draining unconditionally
+# deadlocks paths with no upstream pipe; never draining gives the upstream
 # `kubectl create` EPIPE, which `set -o pipefail` turns into a flaky failure.
-drain_if_patch_file() {
-  case "${ARGS}" in *--patch-file*) cat >/dev/null ;; esac
-}
+drain_if_patch_file() { case "${ARGS}" in *--patch-file*) cat >/dev/null ;; esac; }
 case "${ARGS}" in
   *"get configmap coredns -o jsonpath"*)
     [[ -n "${COREFILE:-}" ]] && cat "${COREFILE}" || exit 1 ;;
-  *"get configmap coredns-custom"*)
-    [[ "${CUSTOM_EXISTS:-no}" == yes ]] && exit 0 || exit 1 ;;
   *--from-file=Corefile=*)
-    # `create --from-file` does not read stdin. Keep the rendered Corefile so
-    # the test can assert on its CONTENT, not merely that a write happened.
     f="${ARGS##*--from-file=Corefile=}"; f="${f%% *}"
     cp "${f}" "${RENDERED}"
-    echo "WRITE corefile" >> "${CALLS}"
+    echo "WRITE" >> "${CALLS}"
     printf 'apiVersion: v1\nkind: ConfigMap\n' ;;
-  *"create configmap coredns-custom"*)
-    echo "WRITE coredns-custom" >> "${CALLS}" ;;
   *"patch configmap coredns "*)
     drain_if_patch_file
-    echo "PATCH corefile" >> "${CALLS}"
-    [[ "${PATCH_FAILS:-no}" == yes ]] && exit 1 || exit 0 ;;
-  *"patch configmap coredns-custom"*)
-    drain_if_patch_file
-    echo "PATCH coredns-custom" >> "${CALLS}" ;;
+    echo "PATCH" >> "${CALLS}"
+    n=$(grep -c PATCH "${CALLS}" 2>/dev/null || true)
+    # 1 = the change, 2 = the restore. Separate knobs so each failure is
+    # exercised on its own; one knob failing both lets a mutant that stops
+    # checking either survive.
+    [[ "${n}" -le 1 && "${PATCH_FAILS:-no}" == yes ]] && exit 1
+    [[ "${n}" -ge 2 && "${RESTORE_PATCH_FAILS:-no}" == yes ]] && exit 1
+    exit 0 ;;
   *"rollout status"*)
     echo "ROLLOUT-STATUS" >> "${CALLS}"
-    [[ "${ROLLOUT_FAILS:-no}" == yes ]] && exit 1 || exit 0 ;;
-  *"rollout restart"*)                echo "ROLLOUT-RESTART" >> "${CALLS}" ;;
-  *)                                  echo "OTHER ${ARGS}" >> "${CALLS}" ;;
+    n=$(grep -c ROLLOUT-STATUS "${CALLS}" 2>/dev/null || true)
+    [[ "${n}" -le 1 && "${ROLLOUT_FAILS:-no}" == yes ]] && exit 1
+    [[ "${n}" -ge 2 && "${RESTORE_ROLLOUT_FAILS:-no}" == yes ]] && exit 1
+    exit 0 ;;
+  *"rollout restart"*) echo "ROLLOUT-RESTART" >> "${CALLS}" ;;
+  *) echo "OTHER ${ARGS}" >> "${CALLS}" ;;
 esac
 EOF
 chmod +x "${WORK}/kubectl"
 export PATH="${WORK}:${PATH}"
 
 fails=0
+CALLS=""; RENDERED=""; OUT=""; RC=0
 
-# run <desc> <corefile-or-empty> <custom-exists> -- <expect-substr>...
-# run_case <desc> <corefile> <custom-exists> [VAR=VALUE ...] -- <expect>...
-# An expectation of "!X" asserts X did NOT happen.
-run_case() {
-  local desc="$1" corefile="$2" custom="$3"; shift 3
-  local -a overrides=()
-  while [[ $# -gt 0 && "$1" != "--" ]]; do overrides+=("$1"); shift; done
-  shift  # drop the --
-  local calls="${WORK}/calls.$$"
-  RENDERED="${WORK}/rendered.$$"
-  : > "${calls}"
-  : > "${RENDERED}"
-  local out
-  if ! out="$(env CALLS="${calls}" COREFILE="${corefile}" CUSTOM_EXISTS="${custom}" \
-        RENDERED="${RENDERED}" DOMAIN="nebari.local" GATEWAY_IP="10.0.0.5" \
-        "${overrides[@]}" bash "${SCRIPT}" 2>&1)"; then
-    echo "::error::${desc}: script exited non-zero (extractors must skip, not fail). Output: ${out}"
-    fails=$((fails + 1)); return
-  fi
-  local want
-  for want in "$@"; do
-    if [[ "${want}" == "!"* ]]; then
-      if grep -qF "${want:1}" "${calls}"; then
-        echo "::error::${desc}: expected NOT to see '${want:1}' but did. Calls: $(tr '\n' ',' < "${calls}")"
-        fails=$((fails + 1)); return
-      fi
-    elif ! grep -qF "${want}" "${calls}"; then
-      echo "::error::${desc}: expected call '${want}'. Calls: $(tr '\n' ',' < "${calls}")"
-      fails=$((fails + 1)); return
-    fi
-  done
-  echo "  ok    ${desc}"
+# drive <corefile-or-empty> [VAR=VALUE ...]
+drive() {
+  local corefile="$1"; shift
+  CALLS="${WORK}/calls"; RENDERED="${WORK}/rendered"
+  : > "${CALLS}"; : > "${RENDERED}"
+  RC=0
+  OUT="$(env CALLS="${CALLS}" RENDERED="${RENDERED}" COREFILE="${corefile}" \
+    DOMAIN="nebari.local" GATEWAY_IP="10.0.0.5" "$@" bash "${SCRIPT}" 2>&1)" || RC=$?
 }
 
-# kind: the zone must land in the Corefile, and coredns-custom must be left
-# alone -- writing it there is the #104 no-op.
-run_case "kind writes the Corefile, not coredns-custom" \
-  "${WORK}/corefile-kind" no -- "PATCH corefile" "!WRITE coredns-custom" "!PATCH coredns-custom"
+ok()   { echo "  ok    $1"; }
+bad()  { echo "::error::$1"; fails=$((fails + 1)); }
 
-# The highest-blast-radius property: the merged Corefile must still contain the
-# ORIGINAL server block. Getting this wrong replaces cluster DNS rather than
-# extending it, and asserting only on which ConfigMap was written would not
-# notice.
+# ── The happy path, asserted on content ──────────────────────────────────────
+drive "${WORK}/corefile"
+if (( RC != 0 )); then
+  bad "kind: expected exit 0, got ${RC}. Output: ${OUT}"
+elif ! grep -q "PATCH" "${CALLS}"; then
+  bad "kind: the Corefile was never patched. Calls: $(tr '\n' ',' < "${CALLS}")"
+else
+  ok "the zone is written into the Corefile"
+fi
+
+# The property that matters most: we ADD to the Corefile, never replace it. A
+# Corefile carrying only our block parses fine and serves nothing, so the
+# rollout check cannot catch it -- only this can.
 if grep -qF "kubernetes cluster.local" "${RENDERED}" \
-   && [[ "$(grep -c '^\.:53 {' "${RENDERED}")" == 1 ]] \
+   && [[ "$(grep -cE '^[[:space:]]*\.:53[[:space:]]*\{' "${RENDERED}")" == 1 ]] \
    && [[ "$(grep -c '^nebari.local:53 {' "${RENDERED}")" == 1 ]]; then
-  echo "  ok    merged Corefile keeps the original .:53 block and adds the zone once"
+  ok "merged Corefile keeps the original .:53 block and adds the zone once"
 else
-  echo "::error::merged Corefile lost the original block or duplicated the zone"
+  bad "merged Corefile lost the original block or duplicated the zone"
   cat "${RENDERED}" || true
-  fails=$((fails + 1))
 fi
 
-# k3s: the zone must land in coredns-custom, because k3s reverts Corefile edits.
-run_case "k3s writes coredns-custom, not the Corefile" \
-  "${WORK}/corefile-k3s" no -- "WRITE coredns-custom" "!PATCH corefile"
-
-run_case "k3s patches an existing coredns-custom" \
-  "${WORK}/corefile-k3s" yes -- "PATCH coredns-custom" "!PATCH corefile"
-
-# Idempotency: a second run must not append the zone again.
-MARKER="# nebari-sandbox: managed zone block (replaced on re-run)"
-{ printf '%s\nnebari.local:53 {\n    errors\n    template IN A nebari.local {\n        answer "{{ .Name }} 60 IN A 10.9.9.9"\n    }\n}\n\n' "${MARKER}"
-  cat "${WORK}/corefile-kind"; } > "${WORK}/corefile-kind-patched"
-# A block we wrote before must be REPLACED, so a changed gateway IP converges
-# instead of being silently kept, and the zone is never defined twice (CoreDNS
-# refuses to load a duplicate zone and takes all cluster DNS down with it).
-run_case "our stale block is replaced, not duplicated or kept" \
-  "${WORK}/corefile-kind-patched" no -- "PATCH corefile"
-if [[ "$(grep -c '^nebari.local:53 {' "${RENDERED}")" == 1 ]] \
-   && grep -qF "10.0.0.5" "${RENDERED}" \
-   && ! grep -qF "10.9.9.9" "${RENDERED}"; then
-  echo "  ok    stale gateway IP converged, zone defined exactly once"
+# Braces must balance, or CoreDNS gets a file it cannot parse. This is what
+# kills an off-by-one in however the merge is done.
+if [[ "$(grep -c '{' "${RENDERED}")" == "$(grep -c '}' "${RENDERED}")" ]]; then
+  ok "merged Corefile has balanced braces"
 else
-  echo "::error::re-run did not converge: expected one nebari.local:53 block carrying 10.0.0.5, not 10.9.9.9"
-  grep -nE 'nebari.local:53|answer' "${RENDERED}" || true
-  fails=$((fails + 1))
+  bad "merged Corefile has unbalanced braces: $(grep -c '{' "${RENDERED}") open vs $(grep -c '}' "${RENDERED}") close"
 fi
 
-# A zone for the domain that we did NOT write belongs to whoever did; adding
-# ours beside it would define the zone twice.
-printf 'nebari.local {\n    errors\n}\n\n' | cat - "${WORK}/corefile-kind" \
-  > "${WORK}/corefile-foreign-zone"
-run_case "a foreign zone block is left alone" \
-  "${WORK}/corefile-foreign-zone" no -- "!PATCH corefile" "!ROLLOUT-RESTART"
-
-# Extractor semantics: an unreadable Corefile means we cannot tell which
-# mechanism applies, so skip cleanly WITHOUT mutating anything.
-run_case "unreadable Corefile skips without mutating" \
-  "" no -- "!PATCH corefile" "!WRITE coredns-custom" "!ROLLOUT-RESTART"
-
-# ...and says so, since a silent no-op is what #104 was.
-if CALLS="${WORK}/calls.warn" COREFILE="" DOMAIN="nebari.local" GATEWAY_IP="10.0.0.5" \
-     bash "${SCRIPT}" 2>&1 | grep -q '::warning::.*could not read the coredns ConfigMap'; then
-  echo "  ok    unreadable Corefile warns"
+# The gateway IP has to actually reach the answer template.
+if grep -qF 'answer "{{ .Name }} 60 IN A 10.0.0.5"' "${RENDERED}"; then
+  ok "the zone answers with the gateway IP"
 else
-  echo "::error::unreadable Corefile: expected a ::warning:: naming the coredns ConfigMap"
-  fails=$((fails + 1))
+  bad "the rendered zone does not answer with the gateway IP"
 fi
 
-# Extractor contract (CONTRIBUTING): a mutation that fails must warn and skip,
-# not fail the run -- and a CoreDNS that will not come back must be rolled back
-# rather than left broken while the platform is still converging.
-run_case "a failed Corefile patch warns and skips" \
-  "${WORK}/corefile-kind" no PATCH_FAILS=yes -- "!ROLLOUT-RESTART"
-run_case "a failed rollout rolls the Corefile back" \
-  "${WORK}/corefile-kind" no ROLLOUT_FAILS=yes -- "PATCH corefile"
+# AAAA and ANY must answer empty NOERROR. Without them a dual-stack resolver
+# stalls on the AAAA lookup and an HTTPS/SVCB (type 65) query gets SERVFAIL from
+# an authoritative zone with no fallthrough -- both look like the DNS being
+# broken rather than the record being absent.
+if grep -qE 'template IN AAAA nebari\.local' "${RENDERED}" \
+   && grep -qE 'template IN ANY nebari\.local' "${RENDERED}" \
+   && [[ "$(grep -c 'rcode NOERROR' "${RENDERED}")" == 2 ]]; then
+  ok "AAAA and ANY answer empty NOERROR rather than SERVFAIL"
+else
+  bad "the zone is missing the AAAA/ANY empty-NOERROR templates"
+fi
+
+# The closing log names where it wrote, so a no-op cannot report success.
+if grep -q "In-cluster DNS ready via the coredns Corefile" <<<"${OUT}"; then
+  ok "closing log names the file it wrote"
+else
+  bad "expected the closing log to name the coredns Corefile"
+fi
+
+# It must NOT write coredns-custom: that is the k3s convention kind ignores,
+# and writing it was #104.
+if grep -q "coredns-custom" "${CALLS}"; then
+  bad "wrote coredns-custom, which kind's CoreDNS never reads (#104)"
+else
+  ok "does not write coredns-custom"
+fi
+
+# ── An existing zone for the domain is left alone, in every legal spelling ───
+# Adding ours beside one of these defines the zone twice; CoreDNS then refuses
+# to load and takes all cluster DNS with it.
+for spelling in \
+  'nebari.local {' \
+  'nebari.local:53 {' \
+  'nebari.local. {' \
+  'nebari.local example.org {' \
+  'example.org nebari.local {'; do
+  printf '%s\n    errors\n}\n\n' "${spelling}" | cat - "${WORK}/corefile" \
+    > "${WORK}/corefile-existing"
+  drive "${WORK}/corefile-existing"
+  if (( RC == 0 )) && ! grep -q "PATCH" "${CALLS}" \
+     && grep -q "::warning::.*already defines a nebari.local zone" <<<"${OUT}"; then
+    ok "leaves an existing zone alone: ${spelling}"
+  else
+    bad "should have skipped an existing '${spelling}' zone without patching (rc=${RC}, calls=$(tr '\n' ',' < "${CALLS}"))"
+  fi
+done
+
+# A more specific zone is a different zone and must not block us.
+printf 'sub.nebari.local:53 {\n    errors\n}\n\n' | cat - "${WORK}/corefile" \
+  > "${WORK}/corefile-subzone"
+drive "${WORK}/corefile-subzone"
+if (( RC == 0 )) && grep -q "PATCH" "${CALLS}"; then
+  ok "a more specific zone (sub.<domain>) does not block the change"
+else
+  bad "sub.nebari.local should not have counted as our zone (rc=${RC}, calls=$(tr '\n' ',' < "${CALLS}"))"
+fi
+
+# ── Never hand CoreDNS a Corefile that is worse than what it had ─────────────
+# Reachable when the Corefile we read is already damaged: the merge inherits the
+# damage, and a file CoreDNS cannot parse (or one with no default server block)
+# must not be applied.
+printf '.:53 {\n    errors\n' > "${WORK}/corefile-unbalanced"
+drive "${WORK}/corefile-unbalanced"
+if (( RC == 0 )) && ! grep -q "PATCH" "${CALLS}" \
+   && grep -q "::warning::.*unbalanced braces" <<<"${OUT}"; then
+  ok "refuses to apply a Corefile with unbalanced braces"
+else
+  bad "an unbalanced Corefile should be refused, not applied (rc=${RC}, calls=$(tr '\n' ',' < "${CALLS}"))"
+fi
+
+printf 'example.org:53 {\n    errors\n}\n' > "${WORK}/corefile-no-default"
+drive "${WORK}/corefile-no-default"
+if (( RC == 0 )) && ! grep -q "PATCH" "${CALLS}" \
+   && grep -q "::warning::.*lost the default server block" <<<"${OUT}"; then
+  ok "refuses to apply a Corefile with no default .:53 block"
+else
+  bad "a Corefile without .:53 should be refused (rc=${RC}, calls=$(tr '\n' ',' < "${CALLS}"))"
+fi
+
+# ── Guards skip before touching the cluster ──────────────────────────────────
+for bad_input in 'DOMAIN=' 'DOMAIN=foo{}bar' 'GATEWAY_IP=' 'GATEWAY_IP=not-an-ip'; do
+  CALLS="${WORK}/calls.guard"; : > "${CALLS}"
+  if env CALLS="${CALLS}" RENDERED="${WORK}/r" COREFILE="${WORK}/corefile" \
+       DOMAIN="nebari.local" GATEWAY_IP="10.0.0.5" "${bad_input}" \
+       bash "${SCRIPT}" >/dev/null 2>&1 && [[ ! -s "${CALLS}" ]]; then
+    ok "skips before kubectl on ${bad_input}"
+  else
+    bad "${bad_input}: expected a clean skip with no kubectl calls"
+  fi
+done
+
+drive ""
+if (( RC == 0 )) && [[ ! -s "${CALLS}" ]] \
+   && grep -q "::warning::.*could not read the coredns ConfigMap" <<<"${OUT}"; then
+  ok "an unreadable Corefile warns and mutates nothing"
+else
+  bad "unreadable Corefile should warn and mutate nothing (rc=${RC})"
+fi
+
+# ── Failure paths: degrade, and be honest when we cannot ─────────────────────
+drive "${WORK}/corefile" PATCH_FAILS=yes
+if (( RC == 0 )) && ! grep -q "ROLLOUT-RESTART" "${CALLS}" \
+   && grep -q "::warning::.*could not patch" <<<"${OUT}"; then
+  ok "a failed patch warns and skips without restarting CoreDNS"
+else
+  bad "failed patch should warn and skip (rc=${RC}, calls=$(tr '\n' ',' < "${CALLS}"))"
+fi
+
+drive "${WORK}/corefile" ROLLOUT_FAILS=yes
+if (( RC == 0 )) && grep -q "Previous Corefile restored" <<<"${OUT}"; then
+  ok "a CoreDNS that will not come back is rolled back, and the run continues"
+else
+  bad "failed rollout should restore and exit 0 (rc=${RC}). Output: ${OUT}"
+fi
 if grep -qF "kubernetes cluster.local" "${RENDERED}" \
-   && ! grep -qF "nebari-sandbox" "${RENDERED}"; then
-  echo "  ok    rollback restored a Corefile without our block"
+   && ! grep -q "^nebari.local:53 {" "${RENDERED}"; then
+  ok "the restored Corefile is the original, without our block"
 else
-  echo "::error::rollback did not restore the original Corefile"
-  fails=$((fails + 1))
+  bad "rollback did not restore the original Corefile"
 fi
 
-# The closing log names the mechanism, which is what stops a no-op from
-# masquerading as success. Pin it.
-if CALLS="${WORK}/calls.mech" RENDERED="${WORK}/rendered.mech" \
-     COREFILE="${WORK}/corefile-kind" DOMAIN="nebari.local" GATEWAY_IP="10.0.0.5" \
-     bash "${SCRIPT}" 2>&1 | grep -q "In-cluster DNS ready via coredns Corefile server block"; then
-  echo "  ok    closing log names the mechanism used"
+# The important one: if the restore ITSELF fails, cluster DNS may be down. That
+# has to be an error, not a reassuring warning over a green job.
+# Both halves of the restore have to be verified independently: writing the old
+# Corefile back is not the same as CoreDNS actually loading it.
+drive "${WORK}/corefile" ROLLOUT_FAILS=yes RESTORE_PATCH_FAILS=yes
+if (( RC != 0 )) && grep -q "::error::.*could not be restored" <<<"${OUT}"; then
+  ok "a restore whose patch fails errors out instead of claiming DNS is fine"
 else
-  echo "::error::expected the closing log to name the mechanism it wrote through"
-  fails=$((fails + 1))
+  bad "a failed restore patch must exit non-zero with an ::error:: (rc=${RC}). Output: ${OUT}"
+fi
+
+drive "${WORK}/corefile" ROLLOUT_FAILS=yes RESTORE_ROLLOUT_FAILS=yes
+if (( RC != 0 )) && grep -q "::error::.*could not be restored" <<<"${OUT}"; then
+  ok "a restore CoreDNS still will not load errors out"
+else
+  bad "a restore whose rollout never becomes ready must exit non-zero (rc=${RC}). Output: ${OUT}"
 fi
 
 if (( fails > 0 )); then

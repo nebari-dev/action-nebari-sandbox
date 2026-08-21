@@ -10,6 +10,11 @@ on:
       - 'scripts/**'
       - 'tests/**'
       - '.github/workflows/test-action.yml'
+      # dist/ is what actually runs, src/ is what produces it: a change to
+      # either (step ordering, what a step is passed) has to run the platform
+      # job that would notice.
+      - 'src/**'
+      - 'dist/**'
       # The drift guard exists to keep the README's foundational apps tree
       # honest, so a README-only change has to run it too.
       - 'README.md'

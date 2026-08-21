@@ -10,6 +10,13 @@
 #
 # Resolve the name from a pod and require the gateway IP back. Doubles as a
 # regression check if the CoreDNS layout changes again under us.
+#
+# Scope: this proves RESOLUTION, not reachability. The address resolved to may
+# still be unroutable from the cluster network -- NIC currently hands out its
+# fallback MetalLB pool rather than one derived from the kind Docker network
+# (nebari-dev/nebari-infrastructure-core#612), so a pod's OIDC fetch to
+# https://keycloak.<domain> can still fail to connect with this green. Asserting
+# reachability here is blocked on that fix.
 
 set -euo pipefail
 
@@ -93,7 +100,17 @@ OUT="$(kubectl logs "${POD}" -n "${NS}" 2>&1 || true)"
 echo "${OUT}" | sed 's/^/  /'
 
 if [[ "${PHASE}" != "Succeeded" && "${PHASE}" != "Failed" ]]; then
-  echo "::error::probe pod never finished (last phase: ${PHASE:-none}); could not verify in-cluster DNS"
+  # A cold `busybox` pull (or a rate-limited one) stalls in Pending/
+  # ImagePullBackOff and would otherwise be reported as a DNS failure, which is
+  # a misleading place to start debugging.
+  REASON="$(kubectl get pod "${POD}" -n "${NS}" \
+    -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || true)"
+  case "${REASON}" in
+    ErrImagePull|ImagePullBackOff)
+      echo "::error::probe pod could not pull its image (${REASON}); in-cluster DNS was NOT verified either way" ;;
+    *)
+      echo "::error::probe pod never finished (last phase: ${PHASE:-none}, waiting reason: ${REASON:-none}); could not verify in-cluster DNS" ;;
+  esac
   kubectl describe pod "${POD}" -n "${NS}" || true
   exit 1
 fi
@@ -106,7 +123,11 @@ if [[ "${PHASE}" == "Failed" ]]; then
   echo "::error::${HOST} does not resolve from inside the cluster. The ${DOMAIN} zone is not configured in whatever CoreDNS actually reads (see #104)."
   exit 1
 fi
-if ! grep -qF "${GATEWAY_IP}" <<<"${OUT}"; then
+# Whole-address match: a substring test passes when the zone answers
+# 172.18.0.40 and the gateway is 172.18.0.4, both plausible in the MetalLB pool
+# carved from the kind Docker network -- so the wrong-address case this exists
+# to catch would false-pass.
+if ! grep -qE "(^|[^0-9.])${GATEWAY_IP//./\\.}([^0-9.]|$)" <<<"${OUT}"; then
   echo "::error::${HOST} resolves, but not to the gateway ${GATEWAY_IP}. The ${DOMAIN} zone is answering with the wrong address."
   exit 1
 fi
