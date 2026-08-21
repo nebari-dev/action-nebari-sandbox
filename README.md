@@ -87,6 +87,7 @@ ${GITOPS_DIR}/
         httproutes.yaml
         keycloak.yaml
         metallb-config.yaml
+        metallb.yaml
         nebari-landingpage.yaml
         nebari-operator.yaml
         opentelemetry-collector.yaml
