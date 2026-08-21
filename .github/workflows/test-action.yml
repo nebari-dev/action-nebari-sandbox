@@ -95,6 +95,17 @@ jobs:
             || { echo "::error::argocd-admin-password output is empty"; exit 1; }
           echo "OK: gateway-ip=${GATEWAY_IP}; keycloak/argocd admin passwords populated"
 
+      # Restored: the kind migration (#99) dropped this step, deferring
+      # "full run-scenarios" to a later phase of #97. It never came back, so the
+      # only tier that can catch in-cluster reachability bugs has been off ever
+      # since - which is how #104 (DNS a no-op on kind) and #103 (gateway-ip
+      # never connected to) both shipped green. The scenarios are what make
+      # those assertions possible, so they need to actually run.
+      - name: Run scenarios
+        run: bash tests/run-scenarios.sh
+        env:
+          KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+
       - name: Debug cluster state
         if: failure()
         env:

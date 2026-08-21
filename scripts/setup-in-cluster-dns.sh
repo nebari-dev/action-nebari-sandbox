@@ -6,10 +6,19 @@
 # fetch that exact hostname. But `*.<domain>` doesn't resolve inside the cluster
 # (the README only reaches the gateway from the runner via `curl --resolve`).
 #
-# k3s CoreDNS imports an optional `coredns-custom` ConfigMap (mounted at
-# /etc/coredns/custom, `import .../*.server`). We add a server block that
-# answers the whole `<domain>` zone with the gateway LoadBalancer IP using the
-# `template` plugin (the only stock plugin that supports wildcard responses).
+# Which file CoreDNS reads depends on the distribution, so we detect it:
+#
+#   - k3s CoreDNS imports an optional `coredns-custom` ConfigMap (mounted at
+#     /etc/coredns/custom, `import .../*.server`). Write there, because k3s
+#     reconciles its packaged manifests and would revert a Corefile edit.
+#   - kind/kubeadm CoreDNS has no such import and no custom mount, so the only
+#     file it reads is the `Corefile` key itself. Writing `coredns-custom`
+#     there is a silent no-op (this was #104): the ConfigMap is created,
+#     CoreDNS restarts, and nothing changes.
+#
+# Either way the block answers the whole `<domain>` zone with the gateway
+# LoadBalancer IP using the `template` plugin (the only stock plugin that
+# supports wildcard responses).
 #
 # Only keycloak.<domain>/argocd.<domain>/<domain> have valid TLS SANs today
 # (NIC's gateway cert has no wildcard SAN), so hosts outside those resolve but
@@ -64,7 +73,10 @@ fi
 echo "::group::Set up in-cluster DNS for *.${DOMAIN} -> ${GATEWAY_IP}"
 
 SERVER_FILE="$(mktemp)"
-trap 'rm -f "${SERVER_FILE}"' EXIT
+# NEW_COREFILE is only used on the Corefile path below; declare it here so a
+# single trap covers both temp files.
+NEW_COREFILE=""
+trap 'rm -f "${SERVER_FILE}" "${NEW_COREFILE}"' EXIT
 # A: answer every name in the zone with the gateway IP. AAAA returns an empty
 # NOERROR so dual-stack / happy-eyeballs resolvers don't stall. The IN ANY
 # catch-all makes any other qtype (SRV/TXT/HTTPS/SVCB type 65) return empty
@@ -85,27 +97,59 @@ ${DOMAIN}:53 {
 }
 EOF
 
-echo "coredns-custom server block (nebari-sandbox.server):"
+echo "server block for the ${DOMAIN} zone:"
 sed 's/^/  /' "${SERVER_FILE}"
 
-# Merge-patch so we don't clobber any coredns-custom keys a consumer set. If the
-# ConfigMap doesn't exist yet, patch fails and we create it.
-if ! kubectl -n kube-system get configmap coredns-custom >/dev/null 2>&1; then
-  kubectl -n kube-system create configmap coredns-custom \
-    --from-file=nebari-sandbox.server="${SERVER_FILE}"
-else
-  kubectl -n kube-system create configmap coredns-custom \
-    --from-file=nebari-sandbox.server="${SERVER_FILE}" \
-    --dry-run=client -o yaml \
-    | kubectl -n kube-system patch configmap coredns-custom --type merge --patch-file /dev/stdin
+# Read the live Corefile to decide which mechanism this cluster's CoreDNS
+# actually honors. Unreadable means we cannot tell, so skip like an extractor
+# rather than mutating a ConfigMap that may never be read.
+COREFILE="$(kubectl -n kube-system get configmap coredns \
+  -o jsonpath='{.data.Corefile}' 2>/dev/null || true)"
+if [[ -z "${COREFILE}" ]]; then
+  echo "::warning::in-cluster DNS: could not read the coredns ConfigMap in kube-system; skipping. Pods will not resolve ${DOMAIN}."
+  echo "::endgroup::"
+  exit 0
 fi
 
-# Restart CoreDNS so new pods mount the ConfigMap immediately, rather than
+if grep -q 'import /etc/coredns/custom/' <<<"${COREFILE}"; then
+  MECHANISM="coredns-custom ConfigMap (k3s-style import)"
+  # Merge-patch so we don't clobber any coredns-custom keys a consumer set. If
+  # the ConfigMap doesn't exist yet, patch fails and we create it.
+  if ! kubectl -n kube-system get configmap coredns-custom >/dev/null 2>&1; then
+    kubectl -n kube-system create configmap coredns-custom \
+      --from-file=nebari-sandbox.server="${SERVER_FILE}"
+  else
+    kubectl -n kube-system create configmap coredns-custom \
+      --from-file=nebari-sandbox.server="${SERVER_FILE}" \
+      --dry-run=client -o yaml \
+      | kubectl -n kube-system patch configmap coredns-custom --type merge --patch-file /dev/stdin
+  fi
+else
+  MECHANISM="coredns Corefile server block"
+  # No custom import, so the Corefile is the only thing CoreDNS reads. Prepend
+  # the zone as an additional server block; zone matching is most-specific, so
+  # position relative to `.:53` does not matter. Skip when it is already there
+  # so a re-run is not additive.
+  if grep -qF "${DOMAIN}:53" <<<"${COREFILE}"; then
+    echo "zone ${DOMAIN}:53 is already in the Corefile; leaving it unchanged."
+    echo "::endgroup::"
+    exit 0
+  fi
+  NEW_COREFILE="$(mktemp)"
+  { cat "${SERVER_FILE}"; printf '\n'; printf '%s\n' "${COREFILE}"; } > "${NEW_COREFILE}"
+  # Patch only the Corefile key, so any other key in the ConfigMap survives.
+  kubectl -n kube-system create configmap coredns \
+    --from-file=Corefile="${NEW_COREFILE}" \
+    --dry-run=client -o yaml \
+    | kubectl -n kube-system patch configmap coredns --type merge --patch-file /dev/stdin
+fi
+
+# Restart CoreDNS so new pods pick up the updated config immediately, rather than
 # waiting up to ~60s for the kubelet volume sync + reload plugin. Completes in
 # seconds, before any consumer workload exists, so the DNS blip is harmless.
 kubectl -n kube-system rollout restart deployment/coredns
 kubectl -n kube-system rollout status deployment/coredns --timeout=120s
 
-echo "In-cluster DNS ready: *.${DOMAIN} resolves to ${GATEWAY_IP} for pods."
+echo "In-cluster DNS ready via ${MECHANISM}: *.${DOMAIN} resolves to ${GATEWAY_IP} for pods."
 echo "  Note: only keycloak.${DOMAIN}, argocd.${DOMAIN}, and ${DOMAIN} have valid TLS SANs."
 echo "::endgroup::"
