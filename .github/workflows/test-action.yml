@@ -10,6 +10,9 @@ on:
       - 'scripts/**'
       - 'tests/**'
       - '.github/workflows/test-action.yml'
+      # The drift guard exists to keep the README's foundational apps tree
+      # honest, so a README-only change has to run it too.
+      - 'README.md'
   workflow_dispatch:
 
 concurrency:
@@ -105,6 +108,11 @@ jobs:
         run: bash tests/run-scenarios.sh
         env:
           KUBECONFIG: ${{ steps.sandbox.outputs.kubeconfig }}
+          # Hand scenarios the values the action actually emitted, so they
+          # assert against its output rather than re-deriving it and agreeing
+          # with themselves.
+          DOMAIN: ${{ steps.sandbox.outputs.domain }}
+          GATEWAY_IP: ${{ steps.sandbox.outputs.gateway-ip }}
 
       - name: Debug cluster state
         if: failure()
